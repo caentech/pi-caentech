@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Raspberry Pi kiosk runner for [caen.tech](https://caen.tech). Two bash scripts that turn a Pi into a wall-mounted display showing the `/interstice/` page (a per-room "what's happening now" view), with optional background music on HDMI.
 
-This repo is intended to live at `<caen.tech-repo>/pi/` on the Pi. `install.sh` clones the parent `caen.tech` repo and runs `pi.sh setup && pi.sh build`. The site itself is **not built here** — `pi.sh build` mirrors the already-published site from `https://caen.tech` with `wget --mirror`.
+`install.sh` clones this repo (the `pi-caentech` repository, into `~/caen.tech` by default) and runs `pi.sh setup && pi.sh build`. The site itself is **not built here** — `pi.sh build` mirrors the already-published site from `https://caen.tech` with `wget --mirror`. The scripts have **no dependency** on a clone of the upstream `caen.tech` source repo.
 
 ## Commands
 
 ```bash
 ./pi.sh setup                       # install cage, mpv, chromium, set TZ, force HDMI audio
-./pi.sh build                       # wget --mirror caen.tech into ../dist (+ /interstice/ explicitly)
+./pi.sh build                       # wget --mirror caen.tech into ./dist (+ /interstice/ explicitly)
 ./pi.sh run conference              # kiosk for the main conference room
 ./pi.sh run amphitheatre            # alias: auditorium (resolves to "auditorium")
 ./pi.sh run tv                      # balanced view (lobby TV, no room highlighted)
@@ -27,8 +27,8 @@ Env overrides: `CAENTECH_HTTP_PORT` (default `4321`), `CAENTECH_SITE_URL` (defau
 
 `pi.sh run <salle>` is the only non-trivial command. It orchestrates three child processes inside a single trap-cleaned shell:
 
-1. **HTTP server** — `python3 -m http.server` on `127.0.0.1:$HTTP_PORT`, serving `../dist` (the mirrored site).
-2. **Background music** (optional) — `mpv --no-video --loop-playlist=inf --shuffle --ao=alsa` over `pi/music/*.mp3`. Skipped silently if no mp3 files are present.
+1. **HTTP server** — `python3 -m http.server` on `127.0.0.1:$HTTP_PORT`, serving `./dist` (the mirrored site, sibling of `pi.sh`).
+2. **Background music** (optional) — `mpv --no-video --loop-playlist=inf --shuffle --ao=alsa` over `music/*.mp3`. Skipped silently if no mp3 files are present.
 3. **Kiosk browser** — `cage -- chromium --kiosk` pointing at `http://localhost:$PORT/interstice/?salle=<salle>`. Runs in foreground; the trap kills the HTTP and music PIDs on exit.
 
 The script writes its own PID to `$XDG_RUNTIME_DIR/caentech-kiosk/run.pid` so `cmd_update` can `kill -TERM` the running kiosk after a re-mirror — systemd or whatever supervises the kiosk is expected to restart it.
@@ -45,11 +45,11 @@ Translation prompts are killed via `--disable-translate` + `--disable-features=T
 
 ### Mirror layout
 
-`pi.sh build` writes to `$PROJECT_ROOT/dist` (i.e. **`../dist` relative to this repo**, not `./dist`). `/interstice/` is fetched explicitly because it is excluded from the sitemap. The build sanity-checks that `dist/interstice/index.html` exists before declaring success.
+`pi.sh build` writes to `$SCRIPT_DIR/dist` (i.e. **`./dist` next to `pi.sh`**). `/interstice/` is fetched explicitly because it is excluded from the sitemap. The build sanity-checks that `dist/interstice/index.html` exists before declaring success.
 
 ## Conventions for this repo
 
-- **Not a git repository in this checkout.** The deployed copy on the Pi is — `pi.sh update` runs `git pull --ff-only` from `$PROJECT_ROOT` (the parent `caen.tech` clone, not this directory).
+- **Self-contained git repository.** `pi.sh update` runs `git pull --ff-only` from `$SCRIPT_DIR` — that's the `pi-caentech` repo itself. There is no longer any dependency on a parent `caen.tech` source clone.
 - **No frontend/backend conventions apply.** The global rules in `~/.claude/` for Memo Bank projects (commit format, module structure, etc.) are not relevant here. Use plain imperative commit messages if/when committing upstream.
 - Shell scripts use `set -euo pipefail` and the `log`/`warn`/`fail` helpers — keep that pattern when adding commands.
 - `cmd_*` functions are dispatched from `main()`'s case statement; add new commands by following the same shape and updating `usage()`.

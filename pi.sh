@@ -2,8 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DIST_DIR="$PROJECT_ROOT/dist"
+DIST_DIR="$SCRIPT_DIR/dist"
 MUSIC_DIR="$SCRIPT_DIR/music"
 HTTP_PORT="${CAENTECH_HTTP_PORT:-4321}"
 SITE_URL="${CAENTECH_SITE_URL:-https://caen.tech}"
@@ -22,12 +21,12 @@ Commands:
   setup                       Install cage, mpv, chromium, wget, set timezone
                               to Europe/Paris, force HDMI audio output.
   build                       Mirror the latest published site from caen.tech
-                              (built by GitHub Actions) into ./dist.
+                              into ./dist (next to this script).
   run <salle>                 Start the interstice kiosk for a given room:
                                 conference   - main conference room
                                 amphitheatre - secondary room (alias: auditorium)
                                 tv           - balanced view (no room highlighted)
-                              Plays mp3 files from pi/music/ in loop on HDMI audio.
+                              Plays mp3 files from ./music/ in loop on HDMI audio.
   update                      git pull (scripts) + re-mirror site + restart the kiosk.
   enable-autostart <salle>    Auto-login on tty1 + launch kiosk at boot for <salle>.
   disable-autostart           Remove the auto-start block and restore login prompt.
@@ -204,7 +203,7 @@ cmd_run() {
 }
 
 cmd_update() {
-  cd "$PROJECT_ROOT"
+  cd "$SCRIPT_DIR"
   log "Pulling latest changes..."
   git pull --ff-only
   cmd_build

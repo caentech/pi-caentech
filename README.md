@@ -6,9 +6,9 @@ Turns a Pi into a wall-mounted display that shows the `/interstice/` page — th
 per-room "what's happening now" view of caen.tech — with optional background
 music on HDMI audio.
 
-This repo is intended to live at `<caen.tech-repo>/pi/` on the Pi. The site
-itself is **not built here**: `pi.sh build` mirrors the already-published site
-from `https://caen.tech` with `wget --mirror`.
+The site itself is **not built here**: `pi.sh build` mirrors the already-published
+site from `https://caen.tech` with `wget --mirror`. This repo is self-contained
+— it does not depend on a clone of the `caen.tech` source repository.
 
 ---
 
@@ -17,13 +17,13 @@ from `https://caen.tech` with `wget --mirror`.
 On a fresh Raspberry Pi (Raspberry Pi OS, with network access):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/caentech/caen.tech/main/pi/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/caentech/pi-caentech/main/install.sh | bash
 ```
 
 This will:
 
 1. Install `git` if missing.
-2. Clone the parent `caen.tech` repository into `~/caen.tech`.
+2. Clone this repository (`pi-caentech`) into `~/caen.tech`.
 3. Run `pi.sh setup` (installs `cage`, `mpv`, `chromium`, `wget`, sets timezone
    to `Europe/Paris`, forces HDMI audio).
 4. Run `pi.sh build` (mirrors the published site into `~/caen.tech/dist`).
@@ -31,9 +31,9 @@ This will:
 Then start the kiosk for the room this Pi is wall-mounted in:
 
 ```bash
-~/caen.tech/pi/pi.sh run conference     # main conference room
-~/caen.tech/pi/pi.sh run amphitheatre   # secondary room (alias: auditorium)
-~/caen.tech/pi/pi.sh run tv             # balanced view (lobby TV)
+~/caen.tech/pi.sh run conference     # main conference room
+~/caen.tech/pi.sh run amphitheatre   # secondary room (alias: auditorium)
+~/caen.tech/pi.sh run tv             # balanced view (lobby TV)
 ```
 
 A reboot after `setup` is recommended before the first `run`, so the audio and
@@ -47,8 +47,8 @@ If you'd rather not pipe a script into bash, do it by hand:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y git
-git clone https://github.com/caentech/caen.tech.git ~/caen.tech
-cd ~/caen.tech/pi
+git clone https://github.com/caentech/pi-caentech.git ~/caen.tech
+cd ~/caen.tech
 ./pi.sh setup
 ./pi.sh build
 ./pi.sh run conference
@@ -60,7 +60,7 @@ cd ~/caen.tech/pi
 
 ```bash
 ./pi.sh setup                       # install cage, mpv, chromium, wget; set TZ; force HDMI audio
-./pi.sh build                       # mirror caen.tech into ../dist (and /interstice/ explicitly)
+./pi.sh build                       # mirror caen.tech into ./dist (and /interstice/ explicitly)
 ./pi.sh run <salle>                 # start the kiosk (see below)
 ./pi.sh update                      # git pull + re-mirror + restart the running kiosk
 ./pi.sh enable-autostart <salle>    # auto-login on tty1 + launch kiosk at boot
@@ -89,12 +89,12 @@ The room name is passed to the page as `?salle=<salle>`.
 
 ## Background music (optional)
 
-Drop `.mp3` files into `pi/music/`. They will be played in shuffled loop on
+Drop `.mp3` files into `music/`. They will be played in shuffled loop on
 HDMI audio whenever a kiosk is running. If the directory is empty, the kiosk
 starts silently — no error.
 
 ```bash
-cp /path/to/*.mp3 ~/caen.tech/pi/music/
+cp /path/to/*.mp3 ~/caen.tech/music/
 ```
 
 ---
@@ -107,12 +107,12 @@ when the Pi is powered on — no keyboard, no SSH, no manual `pi.sh run`.
 ### Enabling it
 
 ```bash
-~/caen.tech/pi/pi.sh enable-autostart conference   # or amphitheatre / tv
+~/caen.tech/pi.sh enable-autostart conference   # or amphitheatre / tv
 sudo reboot
 ```
 
 After the reboot, the Pi will boot straight into the kiosk for the room you
-chose. It will also play whatever `.mp3` files live in `pi/music/`.
+chose. It will also play whatever `.mp3` files live in `music/`.
 
 ### How it actually works
 
@@ -128,7 +128,7 @@ service, no display manager:
    ```bash
    # >>> caentech-kiosk auto-start >>>
    if [ "$(tty)" = "/dev/tty1" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-     exec '/home/pi/caen.tech/pi/pi.sh' run 'conference'
+     exec '/home/caentech/caen.tech/pi.sh' run 'conference'
    fi
    # <<< caentech-kiosk auto-start <<<
    ```
@@ -148,7 +148,7 @@ Just re-run `enable-autostart` with the new room — the block is bracketed
 by markers and gets replaced in place:
 
 ```bash
-~/caen.tech/pi/pi.sh enable-autostart tv
+~/caen.tech/pi.sh enable-autostart tv
 ```
 
 The change applies on the next boot. If the kiosk is already running and
@@ -162,7 +162,7 @@ sudo reboot   # or just wait for the next reboot
 ### Disabling it
 
 ```bash
-~/caen.tech/pi/pi.sh disable-autostart
+~/caen.tech/pi.sh disable-autostart
 ```
 
 This removes the block from `~/.bash_profile` and runs `raspi-config
@@ -182,7 +182,7 @@ log out (`exit`) so auto-login fires again.
 If you want a "kill and restart now" cycle from SSH:
 
 ```bash
-~/caen.tech/pi/pi.sh update         # mirrors + kills the kiosk
+~/caen.tech/pi.sh update          # mirrors + kills the kiosk
 sudo systemctl restart getty@tty1   # forces a fresh tty1 login → re-runs auto-start
 ```
 
@@ -213,13 +213,13 @@ The Pi never builds the site itself — it mirrors what's already published at
 `https://caen.tech`. To pull the latest version of the pages:
 
 ```bash
-~/caen.tech/pi/pi.sh update
+~/caen.tech/pi.sh update
 ```
 
 This does three things:
 
-1. `git pull --ff-only` on the parent `caen.tech` repo (picks up new scripts /
-   music if any).
+1. `git pull --ff-only` on this `pi-caentech` repo (picks up new scripts / music
+   if any).
 2. Re-runs `pi.sh build` to re-mirror the live site (only changed files are
    downloaded, thanks to `wget --mirror` timestamping).
 3. If a kiosk is currently running on this Pi, sends it `SIGTERM` so the
@@ -229,7 +229,7 @@ This does three things:
 If you only want to refresh the pages **without** updating the scripts:
 
 ```bash
-~/caen.tech/pi/pi.sh build
+~/caen.tech/pi.sh build
 ```
 
 ---
@@ -256,7 +256,7 @@ fullscreen. To leave it:
 Run it manually:
 
 ```bash
-~/caen.tech/pi/pi.sh run conference
+~/caen.tech/pi.sh run conference
 ```
 
 For unattended boot-time launch (no keyboard, no SSH), see the
@@ -281,7 +281,7 @@ boot, run `pi.sh disable-autostart`.
 ### How do I get the latest version of the service?
 
 ```bash
-~/caen.tech/pi/pi.sh update
+~/caen.tech/pi.sh update
 ```
 
 This pulls the latest scripts **and** re-mirrors the site. If you only want
@@ -294,7 +294,7 @@ git -C ~/caen.tech pull --ff-only
 If you only want the latest pages (no script update):
 
 ```bash
-~/caen.tech/pi/pi.sh build
+~/caen.tech/pi.sh build
 ```
 
 ### How do I test it without a TV?
@@ -303,7 +303,7 @@ You can run every step except the actual kiosk on any Linux machine:
 
 ```bash
 ./pi.sh build                   # mirror the site
-( cd ../dist && python3 -m http.server 4321 --bind 127.0.0.1 ) &
+( cd dist && python3 -m http.server 4321 --bind 127.0.0.1 ) &
 xdg-open 'http://localhost:4321/interstice/?salle=conference'
 ```
 
@@ -324,7 +324,7 @@ The local HTTP server didn't come up in time, or the mirror is missing. Check:
 
 ```bash
 ls ~/caen.tech/dist/interstice/index.html   # must exist
-curl -I http://localhost:4321/interstice/   # must return 200
+curl -I http://localhost:4321/interstice/     # must return 200
 ```
 
 Re-run `./pi.sh build` if `index.html` is missing.
@@ -334,7 +334,7 @@ Re-run `./pi.sh build` if `index.html` is missing.
 `pi.sh setup` forces audio to HDMI and enables `dtparam=audio=on`, but a
 reboot is needed before that takes effect. Also check:
 
-- `pi/music/` actually contains `.mp3` files (an empty directory is silently
+- `music/` actually contains `.mp3` files (an empty directory is silently
   skipped).
 - The TV/display is not muted and is on the HDMI input the Pi is wired to.
 - `amixer` shows a sane volume: `amixer sget 'Master'`.
@@ -345,14 +345,14 @@ If you're running it manually, just `Ctrl + C` and re-launch with a
 different argument:
 
 ```bash
-~/caen.tech/pi/pi.sh run tv
+~/caen.tech/pi.sh run tv
 ```
 
 If auto-start is enabled, re-run `enable-autostart` with the new room and
 reboot:
 
 ```bash
-~/caen.tech/pi/pi.sh enable-autostart tv
+~/caen.tech/pi.sh enable-autostart tv
 sudo reboot
 ```
 
@@ -364,12 +364,12 @@ editing needed.
 ## Repository layout
 
 ```
-pi/
-├── install.sh        # one-shot bootstrap (clones caen.tech, runs setup + build)
+pi-caentech/
+├── install.sh        # one-shot bootstrap (clones this repo, runs setup + build)
 ├── pi.sh             # the actual kiosk runner (setup / build / run / update)
 ├── music/            # drop *.mp3 here for background audio
+├── dist/             # generated by `pi.sh build` (mirrored site, gitignored)
 └── README.md         # this file
 ```
 
-`pi.sh build` writes the mirrored site to `../dist` (i.e. **next to** this
-`pi/` directory, inside the parent `caen.tech` clone), not to `pi/dist`.
+`pi.sh build` writes the mirrored site to `./dist` (next to this script).

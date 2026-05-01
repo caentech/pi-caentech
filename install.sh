@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${CAENTECH_REPO_URL:-https://github.com/caentech/caen.tech.git}"
+REPO_URL="${CAENTECH_REPO_URL:-https://github.com/caentech/pi-caentech.git}"
 DEST="${1:-$HOME/caen.tech}"
 
 log() { printf "\033[1;34m[caentech-install]\033[0m %s\n" "$*"; }
@@ -20,22 +20,22 @@ else
   git clone "$REPO_URL" "$DEST"
 fi
 
-chmod +x "$DEST/pi/pi.sh" "$DEST/pi/install.sh"
+chmod +x "$DEST/pi.sh" "$DEST/install.sh"
 
-"$DEST/pi/pi.sh" setup
-"$DEST/pi/pi.sh" build
+"$DEST/pi.sh" setup
+"$DEST/pi.sh" build
 
 cat <<EOF
 
 Installation complete.
 
 Next steps:
-  $DEST/pi/pi.sh run conference     # main room kiosk
-  $DEST/pi/pi.sh run amphitheatre   # secondary room kiosk
-  $DEST/pi/pi.sh run tv             # balanced view (e.g. lobby TV)
+  $DEST/pi.sh run conference     # main room kiosk
+  $DEST/pi.sh run amphitheatre   # secondary room kiosk
+  $DEST/pi.sh run tv             # balanced view (e.g. lobby TV)
 
-Drop mp3 files into $DEST/pi/music/ to play background music in loop on HDMI.
+Drop mp3 files into $DEST/music/ to play background music in loop on HDMI.
 
 To update later:
-  $DEST/pi/pi.sh update
+  $DEST/pi.sh update
 EOF
