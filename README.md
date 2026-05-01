@@ -14,11 +14,15 @@ site from `https://caen.tech` with `wget --mirror`. This repo is self-contained
 
 ## Quick start
 
-On a fresh Raspberry Pi (Raspberry Pi OS, with network access):
+On a fresh Raspberry Pi (Raspberry Pi OS, with network access), pass the
+room this Pi is wall-mounted in as an argument to the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/caentech/pi-caentech/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/caentech/pi-caentech/main/install.sh | bash -s -- conference
 ```
+
+Replace `conference` with `amphitheatre` (alias: `auditorium`) or `tv`
+depending on the location.
 
 This will:
 
@@ -27,17 +31,19 @@ This will:
 3. Run `pi.sh setup` (installs `cage`, `mpv`, `chromium`, `wget`, sets timezone
    to `Europe/Paris`, forces HDMI audio).
 4. Run `pi.sh build` (mirrors the published site into `~/caen.tech/dist`).
+5. Run `pi.sh enable-autostart <salle>` (configures tty1 auto-login and
+   appends the kiosk launcher to `~/.bash_profile`).
 
-Then start the kiosk for the room this Pi is wall-mounted in:
+Then reboot to launch the kiosk:
 
 ```bash
-~/caen.tech/pi.sh run conference     # main conference room
-~/caen.tech/pi.sh run amphitheatre   # secondary room (alias: auditorium)
-~/caen.tech/pi.sh run tv             # balanced view (lobby TV)
+sudo reboot
 ```
 
-A reboot after `setup` is recommended before the first `run`, so the audio and
-timezone changes take effect.
+After the reboot, the Pi boots straight into the kiosk for the room you
+selected — no keyboard, no SSH, no manual `pi.sh run` needed. The reboot
+is also required for the audio and timezone changes from `setup` to take
+effect.
 
 ---
 
@@ -51,7 +57,8 @@ git clone https://github.com/caentech/pi-caentech.git ~/caen.tech
 cd ~/caen.tech
 ./pi.sh setup
 ./pi.sh build
-./pi.sh run conference
+./pi.sh enable-autostart conference   # or amphitheatre / tv
+sudo reboot
 ```
 
 ---
@@ -103,6 +110,10 @@ cp /path/to/*.mp3 ~/caen.tech/music/
 
 For an unattended wall-mounted display, the kiosk should come up by itself
 when the Pi is powered on — no keyboard, no SSH, no manual `pi.sh run`.
+
+The `install.sh` quick-start enables auto-start automatically — this
+section is for changing the room later or re-enabling it after
+`disable-autostart`.
 
 ### Enabling it
 
