@@ -33,7 +33,11 @@ Env overrides: `CAENTECH_HTTP_PORT` (default `4321`), `CAENTECH_SITE_URL` (defau
 
 The script writes its own PID to `$XDG_RUNTIME_DIR/caentech-kiosk/run.pid` so `cmd_update` can `kill -TERM` the running kiosk after a re-mirror — systemd or whatever supervises the kiosk is expected to restart it.
 
-Translation prompts are killed via `--disable-translate` + `--disable-features=Translate,TranslateUI` and `--lang=fr-FR` / `--accept-lang=fr-FR,fr`. Cursor hiding is the responsibility of the `/interstice/` page itself (`cursor: none` in CSS) — `pi.sh` does not inject any styling.
+Translation prompts are killed via `--disable-translate` + `--disable-features=Translate,TranslateUI` and `--lang=fr-FR` / `--accept-lang=fr-FR,fr`. Cursor handling has three layers (added in this order, each meant to address a failure mode of the previous):
+
+1. **Page CSS** (`cursor: none` in `/interstice/`) — covers in-page hover once a `wl_pointer.enter` has happened.
+2. **Transparent XCursor theme** (`ensure_blank_cursor_theme`) — generates a 32x32 all-zero-ARGB xcursor at `~/.icons/caentech-blank/cursors/default` plus symlinks for every standard cursor name (so nothing falls back via `Inherits`). `cmd_run` exports `XCURSOR_THEME=caentech-blank` and `XCURSOR_PATH=$HOME/.icons:/usr/share/icons:/usr/share/pixmaps`. The theme **must** live under one of libXcursor's default search paths (`~/.icons` or `/usr/share/icons`) — XDG paths like `~/.local/share/icons` are not searched, which is why an earlier attempt placing it there silently fell back to the default arrow theme.
+3. **Pointer nudge** (`start_pointer_nudge`) — synthesizes a single 1px pointer-motion event ~6 seconds after launch via a uinput device created with `python3-evdev`. On a kiosk with no physical mouse, no `wl_pointer.enter` ever fires, so Chromium never has the chance to call `wl_pointer.set_cursor(NULL)` from its CSS — leaving the compositor's default cursor stuck at screen center. One nudge is enough to trigger the surface-enter handshake. Requires `/dev/uinput` group=input mode 660 (set by `ensure_uinput_access` via `/etc/udev/rules.d/60-caentech-uinput.rules`) and the kiosk user in the `input` group.
 
 ### Boot autostart
 
