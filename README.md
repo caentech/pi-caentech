@@ -54,8 +54,8 @@ salle dans laquelle ce Pi sera installé en argument à l'installeur :
 
 
 ```bash
-# Connexion en SSH au raspberry
-ssh caentech.local -l caentech
+# Connexion en SSH au raspberry (mdp: caentech)
+ssh caentech.local -l caentech 
 # Setup du raspberry, donnant les informations de la salle "conference" 
 curl -fsSL https://raw.githubusercontent.com/caentech/pi-caentech/main/install.sh | bash -s -- conference
 exit

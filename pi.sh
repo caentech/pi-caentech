@@ -368,6 +368,16 @@ cmd_run() {
   mkdir -p "$RUNTIME_DIR"
   echo "$$" > "$PID_FILE"
 
+  # Use a throwaway Chromium profile in tmpfs, rebuilt on every run, so an
+  # older mirror's HTML/SW/cache from ~/.config/chromium can't keep being
+  # served after a rebuild. We hit exactly that: a stale /interstice/ kept
+  # rendering even after `pi.sh build` + reboot, and only `rm -rf
+  # ~/.config/chromium` cleared it. $RUNTIME_DIR lives under tmpfs and is
+  # wiped on boot, so this also bounds disk usage on the SD card.
+  local chromium_profile="$RUNTIME_DIR/chromium-profile"
+  rm -rf "$chromium_profile"
+  mkdir -p "$chromium_profile"
+
   local children=()
   cleanup() {
     log "Shutting down kiosk..."
@@ -399,6 +409,8 @@ cmd_run() {
 
   cage -- "$browser" \
     --kiosk \
+    --user-data-dir="$chromium_profile" \
+    --disk-cache-size=1 \
     --noerrdialogs \
     --disable-infobars \
     --disable-translate \
