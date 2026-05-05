@@ -52,8 +52,17 @@ Lite à l'aide de l'outil officiel Raspberry Pi Imager.
 Sur un Raspberry Pi neuf (Raspberry Pi OS, avec accès au réseau), passer la
 salle dans laquelle ce Pi sera installé en argument à l'installeur :
 
+
 ```bash
+# Connexion en SSH au raspberry
+ssh caentech.local -l caentech
+# Setup du raspberry, donnant les informations de la salle "conference" 
 curl -fsSL https://raw.githubusercontent.com/caentech/pi-caentech/main/install.sh | bash -s -- conference
+exit
+# Téléchargement manuel de la musique
+open https://drive.google.com/file/d/1e7qNFh4UBeUcFaJxY5tYTEF84e4YjeBr/view?usp=sharing
+# Téléchagement de la musique sur le raspberry
+scp ~/Downloads/background.mp3 caentech@caentech.local:~/caen.tech/music/
 ```
 
 Remplacer `conference` par `amphitheatre` (alias : `auditorium`) ou `tv`
@@ -80,23 +89,6 @@ Après le redémarrage, le Pi démarre directement dans le kiosque pour la
 salle choisie — sans clavier, sans SSH, sans `pi.sh run` manuel. Le
 redémarrage est aussi nécessaire pour que les changements de fuseau et
 d'audio appliqués par `setup` prennent effet.
-
----
-
-## Installation manuelle
-
-Si vous préférez ne pas faire passer un script dans `bash`, voici la
-procédure manuelle :
-
-```bash
-sudo apt-get update && sudo apt-get install -y git
-git clone https://github.com/caentech/pi-caentech.git ~/caen.tech
-cd ~/caen.tech
-./pi.sh setup
-./pi.sh build
-./pi.sh enable-autostart conference   # ou amphitheatre / tv
-sudo reboot
-```
 
 ---
 
@@ -131,18 +123,6 @@ Le nom de la salle est passé à la page via `?salle=<salle>`.
 
 ---
 
-## Musique de fond (optionnelle)
-
-Déposez des fichiers `.mp3` dans `music/`. Ils seront joués en boucle
-mélangée sur la sortie audio HDMI tant qu'un kiosque tourne. Si le
-répertoire est vide, le kiosque démarre en silence — pas d'erreur.
-
-```bash
-cp /chemin/vers/*.mp3 ~/caen.tech/music/
-```
-
----
-
 ## Auto-démarrage au boot
 
 Pour un écran mural sans surveillance, le kiosque doit se lancer tout seul
@@ -162,6 +142,19 @@ sudo reboot
 
 Après le redémarrage, le Pi démarre directement dans le kiosque de la
 salle choisie. Il jouera également les `.mp3` présents dans `music/`.
+
+## Musique de fond
+
+Déposez des fichiers `.mp3` dans `music/`. Ils seront joués en boucle
+mélangée sur la sortie audio HDMI tant qu'un kiosque tourne. Si le
+répertoire est vide, le kiosque démarre en silence — pas d'erreur.
+
+```bash
+open https://drive.google.com/file/d/1e7qNFh4UBeUcFaJxY5tYTEF84e4YjeBr/view?usp=sharing
+scp ~/Downloads/background.mp3 caentech@caentech.local:~/caen.tech/music/
+```
+
+---
 
 ### Comment ça marche concrètement
 
