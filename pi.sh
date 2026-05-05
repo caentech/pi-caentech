@@ -277,15 +277,57 @@ start_http_server() {
   echo $!
 }
 
+# Detects an HDMI audio device name usable as `mpv --audio-device=…`.
+# Card names differ between Pi models so we can't hardcode one:
+#   Pi 4 → vc4hdmi0 (HDMI0) / vc4hdmi1 (HDMI1)
+#   Pi 3 → vc4hdmi
+#   Pi 2 → bcm2835-based card with an HDMI sub-device (legacy firmware)
+# We pick the first match in priority order, preferring explicit
+# `hdmi:CARD=…` ALSA sinks over `sysdefault:CARD=…` (the former is the raw
+# HDMI route, the latter goes through dmix/PulseAudio shims). Echoes the
+# device on success; returns nonzero and stays silent when no HDMI route
+# is found, so the caller can fall back to mpv's own auto-selection.
+detect_hdmi_audio_device() {
+  command -v mpv >/dev/null 2>&1 || return 1
+
+  local devices
+  devices="$(mpv --audio-device=help 2>/dev/null || true)"
+  [[ -n "$devices" ]] || return 1
+
+  # mpv prints one device per line like:
+  #   'alsa/hdmi:CARD=vc4hdmi0,DEV=0' (vc4-hdmi-0, ...)
+  local pattern line dev
+  for pattern in \
+      "alsa/hdmi:CARD=vc4hdmi0" \
+      "alsa/hdmi:CARD=vc4hdmi" \
+      "alsa/sysdefault:CARD=vc4hdmi" \
+      "alsa/.*[Hh][Dd][Mm][Ii]"; do
+    line="$(printf '%s\n' "$devices" | grep -E -- "'$pattern" | head -n 1)"
+    if [[ -n "$line" ]]; then
+      dev="$(printf '%s\n' "$line" | sed -nE "s/^[[:space:]]*'([^']+)'.*$/\1/p")"
+      [[ -n "$dev" ]] && { printf '%s\n' "$dev"; return 0; }
+    fi
+  done
+
+  return 1
+}
+
 start_music() {
   if [[ ! -d "$MUSIC_DIR" ]] || ! compgen -G "$MUSIC_DIR/*.mp3" >/dev/null; then
     warn "No mp3 found in $MUSIC_DIR — skipping music."
     return 0
   fi
-  log "Starting background music on HDMI..."
+  local HDMI_DEV
+  HDMI_DEV="$(detect_hdmi_audio_device || true)"
+  if [[ -n "$HDMI_DEV" ]]; then
+    log "Starting background music on HDMI ($HDMI_DEV)..."
+  else
+    warn "Could not detect a Pi HDMI audio device — falling back to mpv auto."
+  fi
   mpv --no-video --no-terminal \
       --loop-playlist=inf --shuffle \
       --ao=alsa \
+      --audio-device="${HDMI_DEV:-auto}" \
       "$MUSIC_DIR"/*.mp3 \
       >/dev/null 2>&1 &
   echo $!
