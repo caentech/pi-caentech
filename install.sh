@@ -17,6 +17,15 @@ case "$SALLE" in
   *) fail "Unknown salle: $SALLE (expected: conference, amphitheatre, tv)" ;;
 esac
 
+run_step() {
+  local label="$1"; shift
+  log "=== Step: $label ==="
+  if ! "$@"; then
+    fail "Step '$label' failed — aborting install. Fix the error above and re-run."
+  fi
+  log "=== Step OK: $label ==="
+}
+
 if ! command -v git >/dev/null 2>&1; then
   log "Installing git..."
   sudo apt-get update
@@ -33,9 +42,13 @@ fi
 
 chmod +x "$DEST/pi.sh" "$DEST/install.sh"
 
-"$DEST/pi.sh" setup
-"$DEST/pi.sh" build
-"$DEST/pi.sh" enable-autostart "$SALLE"
+# Order matters: `build` is the only long step that does no sudo work
+# (wget --mirror, several minutes). Running it last keeps every sudo-using
+# step back-to-back, so the sudo credential cache can't expire between
+# `setup` and `enable-autostart` — which is what caused issue #1.
+run_step "setup"            "$DEST/pi.sh" setup
+run_step "enable-autostart" "$DEST/pi.sh" enable-autostart "$SALLE"
+run_step "build"            "$DEST/pi.sh" build
 
 cat <<EOF
 

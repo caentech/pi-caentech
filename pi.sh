@@ -442,17 +442,59 @@ cmd_update() {
   fi
 }
 
+AUTOLOGIN_DROPIN="/etc/systemd/system/getty@tty1.service.d/autologin.conf"
+
+# Writes the systemd drop-in that auto-logs $1 in on tty1. This is the same
+# thing `raspi-config nonint do_boot_behaviour B2` produces; we keep a direct
+# implementation so enable-autostart still works when raspi-config is missing
+# or its sudo invocation fails silently (issue #1).
+write_autologin_dropin() {
+  local user="$1"
+  local drop_dir
+  drop_dir="$(dirname "$AUTOLOGIN_DROPIN")"
+
+  log "Writing systemd auto-login drop-in for user '$user' at $AUTOLOGIN_DROPIN..."
+  sudo mkdir -p "$drop_dir" || return 1
+  # $TERM must reach systemd literally, $user must be expanded here.
+  sudo tee "$AUTOLOGIN_DROPIN" >/dev/null <<EOF || return 1
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $user --noclear %I \$TERM
+Type=idle
+EOF
+  sudo systemctl daemon-reload || return 1
+  sudo systemctl enable getty@tty1.service >/dev/null 2>&1 || true
+}
+
 cmd_enable_autostart() {
   local raw_salle="${1:-}"
   [[ -n "$raw_salle" ]] || fail "Usage: pi.sh enable-autostart <salle>"
   resolve_salle "$raw_salle" >/dev/null  # validate
 
+  local autologin_method="" autologin_ok=0 profile_ok=0
+
   log "Enabling console auto-login on TTY1..."
   if command -v raspi-config >/dev/null 2>&1; then
-    sudo raspi-config nonint do_boot_behaviour B2 \
-      || warn "raspi-config: could not enable console auto-login"
+    if sudo raspi-config nonint do_boot_behaviour B2; then
+      autologin_method="raspi-config"
+      autologin_ok=1
+    else
+      warn "raspi-config failed — falling back to direct systemd drop-in."
+    fi
   else
-    warn "raspi-config not found — enable console auto-login manually."
+    warn "raspi-config not found — falling back to direct systemd drop-in."
+  fi
+
+  if [[ $autologin_ok -eq 0 ]]; then
+    if write_autologin_dropin "$USER"; then
+      autologin_method="systemd drop-in"
+      autologin_ok=1
+    fi
+  fi
+
+  if [[ ! -f "$AUTOLOGIN_DROPIN" ]]; then
+    warn "Expected auto-login drop-in not found at $AUTOLOGIN_DROPIN."
+    autologin_ok=0
   fi
 
   local profile="$HOME/.bash_profile"
@@ -474,6 +516,27 @@ cmd_enable_autostart() {
     echo "$end_marker"
   } >> "$profile"
 
+  if [[ -f "$profile" ]] && grep -qF "$begin_marker" "$profile"; then
+    profile_ok=1
+  fi
+
+  echo
+  log "Auto-start configuration summary:"
+  if [[ $autologin_ok -eq 1 ]]; then
+    log "  [OK]   tty1 auto-login enabled (via $autologin_method)"
+  else
+    warn "  [FAIL] tty1 auto-login NOT enabled — kiosk will not start at boot"
+  fi
+  if [[ $profile_ok -eq 1 ]]; then
+    log "  [OK]   auto-start block written to $profile (salle=$raw_salle)"
+  else
+    warn "  [FAIL] auto-start block missing from $profile"
+  fi
+
+  if [[ $autologin_ok -eq 0 || $profile_ok -eq 0 ]]; then
+    fail "Auto-start is incomplete — see the failures above before rebooting."
+  fi
+
   log "Auto-start configured. Reboot to test: sudo reboot"
 }
 
@@ -493,6 +556,12 @@ cmd_disable_autostart() {
   if command -v raspi-config >/dev/null 2>&1; then
     sudo raspi-config nonint do_boot_behaviour B1 \
       || warn "raspi-config: could not restore console login"
+  fi
+
+  if [[ -f "$AUTOLOGIN_DROPIN" ]]; then
+    log "Removing systemd auto-login drop-in at $AUTOLOGIN_DROPIN..."
+    sudo rm -f "$AUTOLOGIN_DROPIN"
+    sudo systemctl daemon-reload || true
   fi
 }
 
