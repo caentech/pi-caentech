@@ -205,17 +205,46 @@ PY
   echo $!
 }
 
+# Wraps `apt-get install` with retries so a flaky mirror doesn't kill the
+# whole install. We hit this on a fresh Pi where ~20 packages 404'd against
+# mirrors.ircam.fr mid-fetch (`Unable to connect ... [IP: 2a01:55e0::a1f]`).
+# After the first failure we re-run `apt-get update` (in case the partial
+# fetch invalidated cached indexes) and retry with --fix-missing, which lets
+# apt skip what it already has and re-attempt just the ones that failed.
+apt_install_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    if [[ $attempt -eq 1 ]]; then
+      if sudo apt-get install -y "$@"; then
+        return 0
+      fi
+    else
+      warn "apt-get install failed (attempt $((attempt-1))/3) — refreshing indexes and retrying with --fix-missing..."
+      sleep $((attempt * 5))
+      sudo apt-get update || true
+      if sudo apt-get install -y --fix-missing "$@"; then
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
 cmd_setup() {
   log "Updating apt..."
-  sudo apt-get update
+  # apt-get update can also flake on a bad mirror; don't abort on the first
+  # transient hiccup — the install step has its own retry loop.
+  sudo apt-get update || warn "apt-get update reported errors — continuing anyway."
 
   log "Installing system packages..."
-  sudo apt-get install -y \
+  apt_install_with_retry \
     cage mpv git curl wget ca-certificates alsa-utils python3 python3-evdev \
-    fonts-noto-core fonts-noto-color-emoji
+    fonts-noto-core fonts-noto-color-emoji \
+    || fail "Could not install base packages after 3 attempts — check network/mirror and re-run: pi.sh setup"
 
-  if ! sudo apt-get install -y chromium; then
-    sudo apt-get install -y chromium-browser
+  if ! apt_install_with_retry chromium; then
+    apt_install_with_retry chromium-browser \
+      || fail "Could not install chromium/chromium-browser after 3 attempts — re-run: pi.sh setup"
   fi
 
   ensure_blank_cursor_theme || warn "Could not generate blank cursor theme — cursor may show at boot."
