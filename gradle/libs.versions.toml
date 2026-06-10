@@ -5,6 +5,7 @@ exposed = "0.50.1"
 sqlite = "3.45.3.0"
 coroutines = "1.8.1"
 logback = "1.5.6"
+sshj = "0.38.0"
 
 [libraries]
 ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
@@ -19,6 +20,7 @@ exposed-jdbc = { module = "org.jetbrains.exposed:exposed-jdbc", version.ref = "e
 sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite" }
 kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+sshj = { module = "com.hierynomus:sshj", version.ref = "sshj" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

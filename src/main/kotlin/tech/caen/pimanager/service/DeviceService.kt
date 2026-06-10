@@ -16,12 +16,14 @@ import tech.caen.pimanager.model.DeviceOverview
 import tech.caen.pimanager.model.DeviceState
 import tech.caen.pimanager.model.LogsResponse
 import tech.caen.pimanager.model.PiStatus
+import tech.caen.pimanager.model.PiSwarmConfig
 import tech.caen.pimanager.model.StreamEvent
 import tech.caen.pimanager.model.Summary
 import tech.caen.pimanager.model.UpdateDeviceRequest
 import tech.caen.pimanager.notFound
 import tech.caen.pimanager.nowIso
 import tech.caen.pimanager.nowMillis
+import tech.caen.pimanager.ssh.SshProvisioner
 import tech.caen.pimanager.ssh.SshService
 import tech.caen.pimanager.toIso
 import java.io.File
@@ -34,10 +36,12 @@ import java.io.File
 class DeviceService(
     private val repo: DeviceRepository,
     private val ssh: SshService,
+    private val provisioner: SshProvisioner,
     private val files: FileStore,
     private val eventBus: EventBus,
     private val scope: CoroutineScope,
     private val remoteStatusPath: String,
+    private val remoteSwarmPath: String,
     private val remoteFilesDir: String,
 ) {
     private val log = LoggerFactory.getLogger(DeviceService::class.java)
@@ -136,18 +140,30 @@ class DeviceService(
     private data class PullResult(val state: DeviceState, val rawStatus: String?, val error: String?)
 
     private suspend fun pull(record: DeviceRecord): PullResult {
-        // 1. Connexion SSH impossible -> not connected
+        // 1. Connexion SSH impossible.
         val conn = ssh.testConnection(record.host, record.sshUser)
         if (!conn.success) {
+            // `Permission denied` = hôte EN LIGNE mais clé non posée -> à configurer (new).
+            // Tout autre échec (timeout, route, refus) = réellement injoignable.
+            if (conn.stderr.contains("permission denied", ignoreCase = true)) {
+                return PullResult(DeviceState.NEW, null, null)
+            }
             val err = conn.stderr.trim().ifBlank {
                 if (conn.timedOut) "Timeout de connexion SSH" else "Connexion SSH impossible"
             }
             return PullResult(DeviceState.NOT_CONNECTED, null, err)
         }
-        // 2. SSH OK, pas de fichier de statut -> new
+        // 2. SSH OK, pas de fichier de statut applicatif.
         val read = ssh.readFile(record.host, record.sshUser, remoteStatusPath)
         if (!read.success) {
-            return PullResult(DeviceState.NEW, null, null)
+            // Pas de status.json : si pi-swarm.json existe, le Pi est configuré
+            // (appli pas encore lancée) -> setup in progress ; sinon -> new.
+            val swarm = ssh.readFile(record.host, record.sshUser, remoteSwarmPath)
+            return if (swarm.success) {
+                PullResult(DeviceState.SETUP_IN_PROGRESS, null, null)
+            } else {
+                PullResult(DeviceState.NEW, null, null)
+            }
         }
         // 3. SSH OK, fichier présent -> parser et lire `state`
         val raw = read.stdout.trim()
@@ -196,6 +212,48 @@ class DeviceService(
         } finally {
             tmp.delete()
         }
+    }
+
+    // --- Configuration (enrôlement d'un Pi vierge) ---
+
+    /**
+     * Configure un Pi en ligne mais non enrôlé : pose la clé publique globale
+     * (générée au besoin) via le mot de passe fourni, puis dépose `pi-swarm.json`
+     * (status `setup`). Le mot de passe n'est jamais conservé. Après succès, la clé
+     * suffit : un re-check fait passer le device en `setup in progress`.
+     */
+    suspend fun configure(record: DeviceRecord, password: String): ActionResult {
+        if (password.isBlank()) throw badRequest("Le mot de passe SSH est obligatoire")
+        val user = record.sshUser?.ifBlank { null } ?: "pi"
+        val publicKey = runCatching { provisioner.ensurePublicKey() }
+            .getOrElse { return ActionResult(false, "configure", error = it.message, message = "Échec de préparation de la clé SSH") }
+
+        val swarmJson = appJson.encodeToString(
+            PiSwarmConfig.serializer(),
+            PiSwarmConfig(
+                deviceId = record.id,
+                name = record.name,
+                host = record.host,
+                sshUser = record.sshUser,
+                status = "setup",
+                configuredAt = nowIso(),
+            ),
+        )
+
+        val res = provisioner.configure(record.host, user, password, publicKey, swarmJson, remoteSwarmPath)
+        if (res.success) {
+            // La clé fonctionne désormais : on reflète le nouvel état tout de suite.
+            runCatching { check(record) }
+            eventBus.publish(StreamEvent("device.configured", nowIso(), record.id, message = "Pi configuré (clé + pi-swarm.json)"))
+        }
+        return ActionResult(
+            ok = res.success,
+            action = "configure",
+            exitCode = res.exitCode,
+            output = res.stdout.trim().ifBlank { null },
+            error = res.stderr.trim().ifBlank { null },
+            message = if (res.success) "Configuration réussie : clé SSH posée et pi-swarm.json déposé" else "Échec de la configuration",
+        )
     }
 
     // --- Actions device (SSH) ---

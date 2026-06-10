@@ -26,6 +26,8 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines)
     implementation(libs.logback)
+
+    implementation(libs.sshj)
 }
 
 kotlin {

@@ -5,6 +5,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 data class ExecResult(
@@ -22,20 +23,29 @@ data class ExecResult(
  *
  * - BatchMode=yes  : pas de prompt interactif (échec net si pas de clé).
  * - ConnectTimeout : coupe vite les hôtes injoignables.
+ *
+ * `identityFile` est la clé privée globale posée par la Configuration : on l'offre
+ * via `-i` dès qu'elle existe (additif — les Pi joignables par `~/.ssh` continuent
+ * de marcher). Tant qu'elle n'est pas posée, `BatchMode=yes` provoque l'échec net
+ * `Permission denied` qui signale un Pi en ligne mais non configuré.
  */
-class SshService(private val timeoutSeconds: Long) {
+class SshService(private val timeoutSeconds: Long, private val identityFile: String? = null) {
 
     private val log = LoggerFactory.getLogger(SshService::class.java)
 
     fun target(host: String, user: String?): String =
         if (user.isNullOrBlank()) host else "$user@$host"
 
+    /** `-i <clé>` uniquement si la clé globale a déjà été générée. */
+    private fun identityArgs(): List<String> =
+        identityFile?.takeIf { File(it).exists() }?.let { listOf("-i", it) } ?: emptyList()
+
     private fun sshArgs(): List<String> = listOf(
         "ssh",
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ConnectTimeout=$timeoutSeconds",
-    )
+    ) + identityArgs()
 
     private fun scpArgs(): List<String> = listOf(
         "scp",
@@ -43,7 +53,7 @@ class SshService(private val timeoutSeconds: Long) {
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ConnectTimeout=$timeoutSeconds",
         "-p",
-    )
+    ) + identityArgs()
 
     /** Teste la connexion SSH (commande triviale). */
     suspend fun testConnection(host: String, user: String?): ExecResult =

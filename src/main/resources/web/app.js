@@ -263,6 +263,56 @@ function openAddDevice() {
   $('#f-host', ov).focus();
 }
 
+/* configuration — enrôle un Pi vierge : demande le mot de passe SSH (non stocké),
+   pose la clé publique + dépose pi-swarm.json côté backend */
+function openConfigure(d) {
+  const ov = el(`<div class="overlay">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal__head"><div><div class="modal__title">Configurer ${esc(d.name)}</div></div></div>
+      <div class="modal__body">
+        <div class="setting__hint" style="margin-bottom:14px">
+          Ce Pi est <b>en ligne</b> mais n'a jamais été configuré. pi-manager va y déposer
+          sa clé SSH et un fichier <span class="mono">pi-swarm.json</span>. Saisis le mot de
+          passe du compte <span class="mono">${esc(d.sshUser)}</span> — il sert
+          <b>uniquement</b> à cette opération et <b>n'est pas conservé</b>.
+        </div>
+        <div class="field">
+          <label for="f-pass">Mot de passe SSH</label>
+          <input class="input mono" id="f-pass" type="password" autocomplete="off" placeholder="••••••••">
+          <div class="field__err hidden" id="f-pass-err">Saisis le mot de passe SSH.</div>
+        </div>
+      </div>
+      <div class="modal__foot">
+        <button class="btn btn--ghost" data-cancel>Annuler</button>
+        <button class="btn btn--primary" data-ok>Configurer</button>
+      </div>
+    </div>
+  </div>`);
+  const close = () => ov.remove();
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+  $('[data-cancel]', ov).onclick = close;
+  const submit = async () => {
+    const pass = $('#f-pass', ov).value;
+    if (!pass) { $('#f-pass', ov).classList.add('is-invalid'); $('#f-pass-err', ov).classList.remove('hidden'); $('#f-pass', ov).focus(); return; }
+    const okBtn = $('[data-ok]', ov);
+    okBtn.disabled = true; okBtn.textContent = 'Configuration…';
+    try {
+      const r = await api(`/devices/${d.id}/configure`, { method: 'POST', body: { password: pass } });
+      close();
+      toast(r.ok ? 'Configuration réussie' : 'Configuration échouée', r.message || r.error || '', r.ok ? 'ok' : 'err');
+      await loadFleet();
+      if (view.name === 'detail' && view.deviceId === d.id) openDetail(d.id);
+    } catch (e) {
+      okBtn.disabled = false; okBtn.textContent = 'Configurer';
+      toast('Configuration échouée', e.message, 'err');
+    }
+  };
+  $('[data-ok]', ov).onclick = submit;
+  $('#f-pass', ov).addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  document.body.appendChild(ov);
+  $('#f-pass', ov).focus();
+}
+
 /* ssh — ouvre un terminal sur le Mac via le backend */
 async function launchSSH(d) {
   try {
@@ -368,7 +418,7 @@ function deviceCard(d) {
       </div>`;
   } else if (d.state === 'new') {
     body = `
-      <div class="newprompt">Détecté sur le réseau, en attente de configuration. Lance le setup pour l'ajouter au parc.</div>
+      <div class="newprompt">En ligne mais non configuré. Lance la <b>Configuration</b> pour poser la clé SSH et l'enrôler dans le parc.</div>
       <div class="identity">
         <div class="identity__row"><span class="identity__k">host</span><span class="identity__v">${esc(d.hostname)}</span></div>
         <div class="identity__row"><span class="identity__k">MAC</span><span class="identity__v">${esc(d.mac)}</span></div>
@@ -393,7 +443,7 @@ function deviceCard(d) {
       <div class="toolbar__spacer" style="flex:1"></div>
       <button class="btn btn--sm" data-open="${d.id}">Suivre ${ICN.arrow}</button>`;
   } else if (d.state === 'new') {
-    foot = `<button class="btn btn--primary btn--sm" data-setup="${d.id}">Lancer le setup</button>
+    foot = `<button class="btn btn--primary btn--sm" data-setup="${d.id}">Configuration</button>
       <div class="toolbar__spacer" style="flex:1"></div>
       <button class="btn btn--sm" data-open="${d.id}">Détail ${ICN.arrow}</button>`;
   } else {
@@ -491,7 +541,7 @@ function bindFleet() {
   $('#add-device') && ($('#add-device').onclick = openAddDevice);
   $$('[data-open]').forEach(b => b.onclick = () => openDetail(b.dataset.open));
   $$('[data-ssh]').forEach(b => b.onclick = (e) => { e.stopPropagation(); launchSSH(DEVICES.find(d => d.id === b.dataset.ssh)); });
-  $$('[data-setup]').forEach(b => b.onclick = () => runSetup(b.dataset.setup));
+  $$('[data-setup]').forEach(b => b.onclick = () => { const d = DEVICES.find(x => x.id === b.dataset.setup); if (d) openConfigure(d); });
   bindMiniDrops();
 }
 
@@ -677,8 +727,8 @@ function renderDetail() {
   } else if (d.state === 'new') {
     settings = `<div class="panel">
       <div class="panel__title">Device non configuré</div>
-      <div class="setting__hint" style="margin-bottom:14px">Ce Raspberry Pi vient d'être détecté et attend sa configuration initiale.</div>
-      <button class="btn btn--primary" id="run-setup">Lancer le setup</button>
+      <div class="setting__hint" style="margin-bottom:14px">Ce Raspberry Pi est en ligne mais n'a pas encore été enrôlé. La configuration y dépose la clé SSH de pi-manager et le fichier <span class="mono">pi-swarm.json</span>.</div>
+      <button class="btn btn--primary" id="run-setup">Configuration</button>
     </div>`;
   } else {
     settings = `<div class="panel">
@@ -694,9 +744,11 @@ function renderDetail() {
   const actions = `<div class="panel">
     <div class="panel__title">Actions device</div>
     <div class="actions-row">
-      <button class="btn" id="restart-app" ${d.state === 'off' ? 'disabled' : ''}>${ICN.refresh} Redémarrer l'affichage</button>
+      ${d.state === 'new'
+        ? `<button class="btn btn--primary btn--block" id="configure">Configuration</button>`
+        : `<button class="btn" id="restart-app" ${d.state === 'off' ? 'disabled' : ''}>${ICN.refresh} Redémarrer l'affichage</button>
       <button class="btn btn--danger" id="reboot" ${d.state === 'off' ? 'disabled' : ''}>${ICN.reboot} Redémarrer</button>
-      <button class="btn btn--danger" id="poweroff" ${d.state === 'off' ? 'disabled' : ''}>${ICN.power} Éteindre</button>
+      <button class="btn btn--danger" id="poweroff" ${d.state === 'off' ? 'disabled' : ''}>${ICN.power} Éteindre</button>`}
     </div>
   </div>`;
 
@@ -768,7 +820,8 @@ function bindDetail(d) {
   $$('[data-deferred]').forEach(b => b.onclick = () => toast('Contrôle indisponible', DEFERRED_MSG, 'info'));
   $('#restart-app') && ($('#restart-app').onclick = () => toast('Contrôle indisponible', DEFERRED_MSG, 'info'));
 
-  $('#run-setup') && ($('#run-setup').onclick = () => runSetup(d.id));
+  $('#run-setup') && ($('#run-setup').onclick = () => openConfigure(d));
+  $('#configure') && ($('#configure').onclick = () => openConfigure(d));
 
   $('#reboot') && ($('#reboot').onclick = () => confirmAction({
     title: 'Redémarrer le device ?',

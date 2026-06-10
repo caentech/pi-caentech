@@ -10,7 +10,8 @@ votre configuration `~/.ssh` (clés, alias d'hôte, `~/.ssh/config`).
 
 ## Stack
 
-Kotlin · Ktor (Netty) · kotlinx.serialization · coroutines · Exposed + SQLite.
+Kotlin · Ktor (Netty) · kotlinx.serialization · coroutines · Exposed + SQLite · sshj
+(auth par mot de passe pour la configuration initiale uniquement).
 
 ## Lancement local
 
@@ -54,12 +55,18 @@ d'affichage n'est pas déployée (cliquer affiche une explication).
 Un **poller interne** interroge chaque device enregistré à intervalle régulier.
 L'état est **toujours dérivé du SSH-pull**, jamais poussé par le Pi :
 
-| Condition SSH-pull                          | État renvoyé        |
-|---------------------------------------------|---------------------|
-| Connexion SSH impossible                    | `not connected`     |
-| SSH OK, **pas** de fichier de statut        | `new`               |
-| SSH OK, fichier présent, `state` = `ready`  | `ready`             |
-| SSH OK, fichier présent, autre `state`      | `setup in progress` |
+| Condition SSH-pull                                      | État renvoyé        |
+|---------------------------------------------------------|---------------------|
+| Connexion SSH refusée (`Permission denied`) — Pi en ligne, **non configuré** | `new`               |
+| Connexion SSH impossible (timeout, injoignable)         | `not connected`     |
+| SSH OK, pas de `status.json` **ni** de `pi-swarm.json`  | `new`               |
+| SSH OK, pas de `status.json` mais `pi-swarm.json` présent | `setup in progress` |
+| SSH OK, `status.json` présent, `state` = `ready`        | `ready`             |
+| SSH OK, `status.json` présent, autre `state`            | `setup in progress` |
+
+> Un Pi fraîchement flashé refuse l'accès par clé (`BatchMode=yes` → `Permission denied`) :
+> il est donc **en ligne mais non configuré** et apparaît en `new`, avec un bouton
+> **« Configuration »** (voir ci-dessous).
 
 Un refresh à la demande est aussi disponible : `POST /api/devices/{id}/check`.
 
@@ -86,10 +93,42 @@ Seul `state` pilote l'état ; les autres champs sont **affichés en lecture seul
 `state` vaut `ready` ou `setup in progress`. Le parsing est tolérant
 (champs inconnus ignorés, champs manquants `null`).
 
-### Setup (minimal)
+### Configuration (enrôlement d'un Pi vierge)
 
-`POST /api/devices/{id}/setup` se limite à **installer le fichier de statut** sur
-le Pi (`mkdir -p` + `scp`). Rien d'autre. Les polls suivants verront l'état évoluer.
+`POST /api/devices/{id}/configure` (corps `{ "password": "..." }`) enrôle un Pi en ligne
+mais non configuré. C'est la **seule** opération qui s'authentifie par **mot de passe**
+(via sshj) ; le mot de passe **n'est jamais stocké**. Elle :
+
+1. génère au besoin une **paire de clés globale** (`ssh-keygen ed25519`, stockée dans
+   `data/keys/`, réutilisée pour toute la flotte) ;
+2. ajoute la **clé publique** à `~/.ssh/authorized_keys` du Pi (idempotent) ;
+3. dépose **`pi-swarm.json`** (cf. ci-dessous) avec `status: "setup"`.
+
+Ensuite, la clé suffit : `ssh`/`scp` repassent par `-i data/keys/pi-swarm_ed25519` et le
+device bascule en `setup in progress`.
+
+#### Format de `pi-swarm.json`
+
+Fichier d'enrôlement déposé sur le Pi (chemin par défaut `~/.pi-manager/pi-swarm.json`) :
+
+```json
+{
+  "deviceId": "…",
+  "name": "rpi-salle-elixir",
+  "host": "rpi-salle-elixir.local",
+  "sshUser": "pi",
+  "displayType": null,
+  "status": "setup",
+  "managedBy": "pi-manager",
+  "configuredAt": "2026-06-10T08:00:00Z"
+}
+```
+
+### Setup (minimal, hérité)
+
+`POST /api/devices/{id}/setup` se limite à **installer le fichier de statut** (`status.json`)
+sur le Pi (`mkdir -p` + `scp`). Rien d'autre. L'enrôlement passe désormais par
+`/configure` ; `/setup` reste disponible pour compat.
 
 ## Configuration (variables d'environnement)
 
@@ -101,6 +140,9 @@ Toutes surchargeables ; les défauts conviennent à un usage local.
 | `PI_MANAGER_DB_PATH`                | `data/pi-manager.db`          | Fichier SQLite (registre)                       |
 | `PI_MANAGER_FILES_DIR`              | `data/files`                  | Stockage local des fichiers (dropbox)           |
 | `PI_MANAGER_STATUS_PATH`            | `~/.pi-manager/status.json`   | Chemin **distant** du fichier de statut         |
+| `PI_MANAGER_KEYS_DIR`               | `data/keys`                   | Dossier local de la paire de clés globale       |
+| `PI_MANAGER_IDENTITY_FILE`          | `data/keys/pi-swarm_ed25519`  | Clé privée globale (`.pub` à côté)              |
+| `PI_MANAGER_SWARM_PATH`             | `~/.pi-manager/pi-swarm.json` | Chemin **distant** du fichier d'enrôlement      |
 | `PI_MANAGER_REMOTE_FILES_DIR`       | `~/.pi-manager/files`         | Dossier **distant** de déploiement des fichiers |
 | `PI_MANAGER_POLL_INTERVAL_SECONDS`  | `30`                          | Intervalle du poller                            |
 | `PI_MANAGER_SSH_TIMEOUT_SECONDS`    | `10`                          | Timeout des opérations SSH                      |
@@ -132,10 +174,11 @@ PI_MANAGER_PORT=8080 PI_MANAGER_POLL_INTERVAL_SECONDS=15 ./gradlew run
 
 (+ poller interne périodique — voir ci-dessus, ce n'est pas un endpoint.)
 
-### Setup
+### Configuration / Setup
 | Méthode | Chemin                         | Description                          |
 |---------|--------------------------------|--------------------------------------|
-| POST    | `/api/devices/{id}/setup`      | Installer le fichier de statut (scp) |
+| POST    | `/api/devices/{id}/configure`  | Enrôler un Pi vierge : clé SSH + `pi-swarm.json` (corps `{ "password" }`, mot de passe non stocké) |
+| POST    | `/api/devices/{id}/setup`      | Installer le fichier de statut `status.json` (scp, hérité) |
 
 ### Actions device (SSH)
 | Méthode | Chemin                                  | Description |
@@ -206,7 +249,9 @@ src/main/kotlin/tech/caen/pimanager/
 ├── db/                     # Exposed + SQLite (registre des devices)
 │   ├── Database.kt
 │   └── DeviceRepository.kt
-├── ssh/SshService.kt       # encapsule ssh/scp : test, lecture, exec, transfert, terminal
+├── ssh/
+│   ├── SshService.kt       # encapsule ssh/scp : test, lecture, exec, transfert, terminal (clé)
+│   └── SshProvisioner.kt   # configuration initiale via sshj (auth password) : pose clé + pi-swarm.json
 └── service/
     ├── DeviceService.kt    # orchestration (état, setup, actions, fichiers, logs)
     ├── Poller.kt           # coroutine de SSH-pull périodique

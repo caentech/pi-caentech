@@ -28,6 +28,7 @@ import tech.caen.pimanager.service.DeviceService
 import tech.caen.pimanager.service.EventBus
 import tech.caen.pimanager.service.FileStore
 import tech.caen.pimanager.service.Poller
+import tech.caen.pimanager.ssh.SshProvisioner
 import tech.caen.pimanager.ssh.SshService
 
 private val log = LoggerFactory.getLogger("tech.caen.pimanager.Application")
@@ -43,17 +44,20 @@ fun main() {
 fun Application.module() {
     val startedAt = nowMillis()
     val repo = DeviceRepository()
-    val ssh = SshService(Config.sshTimeoutSeconds)
+    val ssh = SshService(Config.sshTimeoutSeconds, Config.identityFile)
+    val provisioner = SshProvisioner(Config.identityFile, Config.sshTimeoutSeconds)
     val fileStore = FileStore(Config.localFilesDir)
     val eventBus = EventBus()
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val service = DeviceService(
         repo = repo,
         ssh = ssh,
+        provisioner = provisioner,
         files = fileStore,
         eventBus = eventBus,
         scope = appScope,
         remoteStatusPath = Config.remoteStatusPath,
+        remoteSwarmPath = Config.remoteSwarmPath,
         remoteFilesDir = Config.remoteFilesDir,
     )
 

@@ -23,6 +23,7 @@ import io.ktor.server.http.content.staticResources
 import io.ktor.http.CacheControl
 import kotlinx.coroutines.flow.collect
 import tech.caen.pimanager.model.ApiError
+import tech.caen.pimanager.model.ConfigureRequest
 import tech.caen.pimanager.model.CreateDeviceRequest
 import tech.caen.pimanager.model.DeferredControl
 import tech.caen.pimanager.model.HealthResponse
@@ -97,6 +98,13 @@ fun Application.configureRouting(service: DeviceService, eventBus: EventBus, sta
                 post("/setup") {
                     val device = service.requireDevice(call.id())
                     call.respond(service.setup(device))
+                }
+
+                // --- Configuration : poser la clé SSH + pi-swarm.json (auth mot de passe) ---
+                post("/configure") {
+                    val device = service.requireDevice(call.id())
+                    val req = call.receive<ConfigureRequest>()
+                    call.respond(service.configure(device, req.password))
                 }
 
                 // --- Actions device (SSH) ---

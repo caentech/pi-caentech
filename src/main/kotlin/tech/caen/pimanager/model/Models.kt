@@ -92,6 +92,31 @@ data class UpdateDeviceRequest(
     val sshUser: String? = null,
 )
 
+/** Mot de passe du compte SSH, utilisé une seule fois pour la configuration (jamais stocké). */
+@Serializable
+data class ConfigureRequest(
+    val password: String,
+)
+
+/**
+ * Contenu de `pi-swarm.json` déposé sur le Pi à la configuration : identité du
+ * device, configuration associée (à venir) et statut côté manager (`setup` pour
+ * l'instant). Sert de marqueur d'enrôlement « ce Pi est piloté par pi-manager ».
+ */
+@Serializable
+data class PiSwarmConfig(
+    val deviceId: String,
+    val name: String,
+    val host: String,
+    val sshUser: String? = null,
+    /** Type d'affichage associé — non encore piloté (placeholder). */
+    val displayType: String? = null,
+    /** Statut côté manager : `setup` à l'enrôlement. */
+    val status: String = "setup",
+    val managedBy: String = "pi-manager",
+    val configuredAt: String? = null,
+)
+
 // --- Réponses ---
 
 @Serializable
