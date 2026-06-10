@@ -212,6 +212,60 @@ function confirmAction({ title, text, confirmLabel, danger, onConfirm }) {
   $('[data-ok]', ov).focus();
 }
 
+/* suppression d'un device : confirmation + option d'extinction préalable du Pi.
+   L'extinction n'est possible que si la clé SSH est posée (états ready/setup/new). */
+function confirmDeleteDevice(d) {
+  const canShutdown = d.state === 'ready' || d.state === 'setup' || d.state === 'new';
+  const ov = el(`<div class="overlay">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal__head">
+        <span class="modal__warn">${ICN.warn}</span>
+        <div><div class="modal__title">Supprimer ce device du parc ?</div></div>
+      </div>
+      <div class="modal__text"><code>${esc(d.name)}</code> sera <b>définitivement retiré</b> de la base de pi-manager. Action irréversible — la clé SSH déjà posée sur le Pi n'est pas retirée.</div>
+      <label class="checkrow ${canShutdown ? '' : 'is-disabled'}">
+        <input type="checkbox" id="del-shutdown" ${canShutdown ? 'checked' : 'disabled'}>
+        <span>Éteindre le Pi avant de le supprimer${canShutdown ? '' : '<span class="checkrow__hint">indisponible — Pi injoignable ou sans clé SSH</span>'}</span>
+      </label>
+      <div class="modal__foot">
+        <button class="btn btn--ghost" data-cancel>Annuler</button>
+        <button class="btn btn--danger" data-ok>Supprimer</button>
+      </div>
+    </div>
+  </div>`);
+  const close = () => ov.remove();
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+  $('[data-cancel]', ov).onclick = close;
+  $('[data-ok]', ov).onclick = () => {
+    const box = $('#del-shutdown', ov);
+    const shutdownFirst = !!(box && box.checked && !box.disabled);
+    close();
+    deleteDevice(d, shutdownFirst);
+  };
+  document.body.appendChild(ov);
+  $('[data-ok]', ov).focus();
+}
+
+async function deleteDevice(d, shutdownFirst) {
+  if (shutdownFirst) {
+    // Extinction best-effort : on supprime de la base même si elle n'aboutit pas.
+    try {
+      const r = await api(`/devices/${d.id}/actions/shutdown`, { method: 'POST' });
+      toast(r.ok ? 'Extinction demandée' : 'Extinction non confirmée', r.message || '', 'info');
+    } catch (e) {
+      toast('Extinction non confirmée', e.message, 'info');
+    }
+  }
+  try {
+    await api(`/devices/${d.id}`, { method: 'DELETE' });
+    toast('Device supprimé', `${d.name} retiré du parc`, 'ok');
+    go({ name: 'fleet', deviceId: null });
+    await loadFleet();
+  } catch (e) {
+    toast('Suppression échouée', e.message, 'err');
+  }
+}
+
 /* add-device modal */
 function openAddDevice() {
   const ov = el(`<div class="overlay">
@@ -755,6 +809,8 @@ function renderDetail() {
       <button class="btn btn--danger" id="reboot" ${d.state === 'off' ? 'disabled' : ''}>${ICN.reboot} Redémarrer</button>
       <button class="btn btn--danger" id="poweroff" ${d.state === 'off' ? 'disabled' : ''}>${ICN.power} Éteindre</button>`}
     </div>
+    <div class="actions-sep"></div>
+    <button class="btn btn--danger btn--block" id="delete-device">${ICN.trash} Supprimer du parc</button>
   </div>`;
 
   const fileRows = d.files.map(f => {
@@ -840,6 +896,8 @@ function bindDetail(d) {
     confirmLabel: 'Éteindre', danger: true,
     onConfirm: () => deviceAction(d.id, 'shutdown', 'Extinction demandée'),
   }));
+
+  $('#delete-device') && ($('#delete-device').onclick = () => confirmDeleteDevice(d));
 
   /* dropzone */
   const dz = $('#dropzone');
