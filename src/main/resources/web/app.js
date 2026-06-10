@@ -53,13 +53,16 @@ const STATE_META = {
   off:     { label: 'Not connected', cls: 'off' },
 };
 
-/* backend state slug -> frontend state key */
+/* backend state slug -> frontend state key
+   new            = en ligne mais notre clé SSH n'est pas (encore) acceptée
+   to be configured = clé OK mais pi-swarm.json absent/invalide ("À configurer") */
 const STATE_KEY = {
   'ready': 'ready',
   'setup': 'setup',
   'setup in progress': 'setup',   // tolérance rétro-compat
   'new': 'new',
-  'connection setup': 'connect',
+  'to be configured': 'connect',
+  'connection setup': 'connect',  // tolérance rétro-compat
   'not connected': 'off',
 };
 
@@ -213,9 +216,9 @@ function confirmAction({ title, text, confirmLabel, danger, onConfirm }) {
 }
 
 /* suppression d'un device : confirmation + option d'extinction préalable du Pi.
-   L'extinction n'est possible que si la clé SSH est posée (états ready/setup/new). */
+   L'extinction n'est possible que si notre clé SSH est posée (états ready/setup/connect). */
 function confirmDeleteDevice(d) {
-  const canShutdown = d.state === 'ready' || d.state === 'setup' || d.state === 'new';
+  const canShutdown = d.state === 'ready' || d.state === 'setup' || d.state === 'connect';
   const ov = el(`<div class="overlay">
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal__head">
@@ -290,7 +293,7 @@ function openAddDevice() {
             <div class="field"><label for="f-name">Nom (optionnel)</label><input class="input" id="f-name" placeholder="déduit du hostname" autocomplete="off"></div>
             <div class="field"><label for="f-user">Utilisateur SSH</label><input class="input mono" id="f-user" value="pi" autocomplete="off"></div>
           </div>
-          <div class="setting__hint">pi-manager réutilise vos clés SSH (<span class="mono">~/.ssh</span>) — aucune saisie de mot de passe.</div>
+          <div class="setting__hint">pi-manager gère sa <b>propre clé SSH</b> (dans <span class="mono">data/keys/</span>), indépendante de votre <span class="mono">~/.ssh</span>. La <b>Configuration</b> la pose sur le Pi via le mot de passe, une seule fois.</div>
         </div>
       </div>
       <div class="modal__foot">
@@ -474,14 +477,14 @@ function deviceCard(d) {
         <div class="identity__row"><span class="identity__k">IP</span><span class="identity__v">${esc(d.ip)}</span></div>
         <div class="identity__row"><span class="identity__k">host</span><span class="identity__v">${esc(d.hostname)}</span></div>
       </div>`;
-  } else if (d.state === 'connect') {
+  } else if (d.state === 'new') {
     body = `
-      <div class="newprompt">En ligne mais sans clé SSH. Lance la <b>Configuration</b> pour poser la clé et l'enrôler dans le parc.</div>
+      <div class="newprompt">En ligne mais notre <b>clé SSH</b> n'est pas encore acceptée. Lance la <b>Configuration</b> pour poser la clé et l'enrôler dans le parc.</div>
       <div class="identity">
         <div class="identity__row"><span class="identity__k">host</span><span class="identity__v">${esc(d.hostname)}</span></div>
         <div class="identity__row"><span class="identity__k">MAC</span><span class="identity__v">${esc(d.mac)}</span></div>
       </div>`;
-  } else if (d.state === 'new') {
+  } else if (d.state === 'connect') {
     body = `
       <div class="newprompt">Clé SSH en place mais le fichier <span class="mono">pi-swarm.json</span> est absent ou invalide. Relance la <b>Configuration</b> pour réparer l'enrôlement.</div>
       <div class="identity">
@@ -777,13 +780,13 @@ function renderDetail() {
       </div>
       <div class="setting__hint" style="margin-top:14px">Les contrôles d'affichage seront disponibles une fois le setup terminé.</div>
     </div>`;
-  } else if (d.state === 'connect') {
+  } else if (d.state === 'new') {
     settings = `<div class="panel">
       <div class="panel__title">Connexion à configurer</div>
-      <div class="setting__hint" style="margin-bottom:14px">Ce Raspberry Pi est en ligne mais n'a pas encore de clé SSH. La configuration y dépose la clé SSH de pi-manager et le fichier <span class="mono">pi-swarm.json</span> (enrôlement + état).</div>
+      <div class="setting__hint" style="margin-bottom:14px">Ce Raspberry Pi est en ligne mais notre clé SSH n'est pas encore acceptée. La configuration y dépose la clé SSH de pi-manager et le fichier <span class="mono">pi-swarm.json</span> (enrôlement + état).</div>
       <button class="btn btn--primary" id="run-setup">Configuration</button>
     </div>`;
-  } else if (d.state === 'new') {
+  } else if (d.state === 'connect') {
     settings = `<div class="panel">
       <div class="panel__title">Enrôlement incomplet</div>
       <div class="setting__hint" style="margin-bottom:14px">La clé SSH fonctionne, mais le fichier <span class="mono">pi-swarm.json</span> est absent ou invalide. Relance la configuration pour le redéposer et enrôler le Pi.</div>

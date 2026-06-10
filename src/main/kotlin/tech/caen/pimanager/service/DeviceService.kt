@@ -102,8 +102,8 @@ class DeviceService(
             total = states.size,
             ready = states.count { it == DeviceState.READY },
             setup = states.count { it == DeviceState.SETUP },
+            toBeConfigured = states.count { it == DeviceState.TO_BE_CONFIGURED },
             new = states.count { it == DeviceState.NEW },
-            connectionSetup = states.count { it == DeviceState.CONNECTION_SETUP },
             notConnected = states.count { it == DeviceState.NOT_CONNECTED },
         )
     }
@@ -139,31 +139,33 @@ class DeviceService(
     private data class PullResult(val state: DeviceState, val rawStatus: String?, val error: String?)
 
     private suspend fun pull(record: DeviceRecord): PullResult {
-        // 1. Connexion SSH.
+        // 1. Connexion SSH (avec NOTRE clé uniquement).
         val conn = ssh.testConnection(record.host, record.sshUser)
         if (!conn.success) {
-            // `Permission denied` = hôte EN LIGNE mais clé non posée -> connexion à
-            // configurer. Tout autre échec (timeout, route, refus) = réellement injoignable.
+            // `Permission denied` = hôte EN LIGNE mais notre clé n'est pas (encore) posée :
+            // le Pi vient d'être ajouté, connexion SSH non établie -> `new`. Tout autre échec
+            // (timeout, route, refus) = réellement injoignable -> `not connected`.
             if (conn.stderr.contains("permission denied", ignoreCase = true)) {
-                return PullResult(DeviceState.CONNECTION_SETUP, null, null)
+                return PullResult(DeviceState.NEW, null, null)
             }
             val err = conn.stderr.trim().ifBlank {
                 if (conn.timedOut) "Timeout de connexion SSH" else "Connexion SSH impossible"
             }
             return PullResult(DeviceState.NOT_CONNECTED, null, err)
         }
-        // 2. SSH OK : on lit le fichier UNIQUE pi-manager (enrôlement + état). Absent,
-        //    illisible ou non marqué `managedBy = pi-manager` -> le Pi n'est pas (correctement)
-        //    enrôlé -> `new`. C'est ce fichier qui matérialise l'enrôlement.
+        // 2. SSH OK (clé acceptée) : on lit le fichier UNIQUE pi-manager (enrôlement + état).
+        //    Absent, illisible ou non marqué `managedBy = pi-manager` -> la clé fonctionne mais
+        //    le Pi n'est pas (correctement) enrôlé -> `to be configured`. C'est ce fichier qui
+        //    matérialise l'enrôlement.
         val read = ssh.readFile(record.host, record.sshUser, remoteStatePath)
         if (!read.success) {
-            return PullResult(DeviceState.NEW, null, null)
+            return PullResult(DeviceState.TO_BE_CONFIGURED, null, null)
         }
         val raw = read.stdout.trim()
         val parsed = runCatching { appJson.decodeFromString<PiStatus>(raw) }.getOrNull()
         if (parsed == null || parsed.managedBy != PiStatus.MANAGED_BY) {
             return PullResult(
-                DeviceState.NEW,
+                DeviceState.TO_BE_CONFIGURED,
                 raw.ifBlank { null },
                 "Fichier de configuration présent mais invalide (JSON illisible ou non enrôlé par pi-manager)",
             )
@@ -282,7 +284,7 @@ class DeviceService(
 
     // --- SSH (accès rapide) ---
 
-    fun sshCommand(record: DeviceRecord): String = "ssh ${ssh.target(record.host, record.sshUser)}"
+    fun sshCommand(record: DeviceRecord): String = ssh.command(record.host, record.sshUser)
 
     fun sshTarget(record: DeviceRecord): String = ssh.target(record.host, record.sshUser)
 

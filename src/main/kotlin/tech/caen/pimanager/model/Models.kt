@@ -12,11 +12,11 @@ enum class DeviceState {
     @SerialName("not connected")
     NOT_CONNECTED,
 
-    @SerialName("connection setup")
-    CONNECTION_SETUP,
-
     @SerialName("new")
     NEW,
+
+    @SerialName("to be configured")
+    TO_BE_CONFIGURED,
 
     @SerialName("ready")
     READY,
@@ -28,8 +28,8 @@ enum class DeviceState {
         /** Parse une valeur de filtre (?state=) de façon tolérante. */
         fun fromSlug(value: String): DeviceState? = when (value.trim().lowercase()) {
             "not connected", "not_connected", "notconnected", "offline", "disconnected" -> NOT_CONNECTED
-            "connection setup", "connection_setup", "connectionsetup", "connect", "no key", "no_key" -> CONNECTION_SETUP
-            "new" -> NEW
+            "new", "no key", "no_key" -> NEW
+            "to be configured", "to_be_configured", "tobeconfigured", "connection setup", "connect" -> TO_BE_CONFIGURED
             "ready" -> READY
             "setup", "setup in progress", "setup_in_progress", "in progress", "in_progress" -> SETUP
             else -> null
@@ -181,8 +181,8 @@ data class Summary(
     val total: Int,
     val ready: Int,
     val setup: Int,
+    val toBeConfigured: Int,
     val new: Int,
-    val connectionSetup: Int,
     val notConnected: Int,
 )
 
