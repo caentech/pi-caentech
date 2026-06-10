@@ -53,12 +53,14 @@
   --st-ready: #92c784;
   --st-setup: #ffdd00;
   --st-new:   #85ccd5;
+  --st-connect: #e8954a;
   --st-off:   #6b7280;
   --danger:   #e85d5d;
 
   --st-ready-ink: #92c784;
   --st-setup-ink: #ffdd00;
   --st-new-ink:   #85ccd5;
+  --st-connect-ink: #e8954a;
   --st-off-ink:   #aab0ba;
   --danger-ink:   #ff8a8a;
 
@@ -89,12 +91,14 @@
   --st-ready: #5aa85f;
   --st-setup: #e0b100;
   --st-new:   #3fa5b2;
+  --st-connect: #d6802a;
   --st-off:   #9098a3;
   --danger:   #d64545;
 
   --st-ready-ink: #2f7a34;
   --st-setup-ink: #8a6d00;
   --st-new-ink:   #1c7a86;
+  --st-connect-ink: #a85e16;
   --st-off-ink:   #5b636e;
   --danger-ink:   #c0322f;
 
@@ -192,6 +196,8 @@ input { font-family: inherit; }
 .badge--setup .badge__dot { background: var(--st-setup); animation: pulse 1.4s ease-in-out infinite; }
 .badge--new { color: var(--st-new-ink); background: color-mix(in srgb, var(--st-new) 15%, transparent); border-color: color-mix(in srgb, var(--st-new) 34%, transparent); }
 .badge--new .badge__dot { background: var(--st-new); }
+.badge--connect { color: var(--st-connect-ink); background: color-mix(in srgb, var(--st-connect) 15%, transparent); border-color: color-mix(in srgb, var(--st-connect) 34%, transparent); }
+.badge--connect .badge__dot { background: var(--st-connect); animation: pulse 1.4s ease-in-out infinite; }
 .badge--off { color: var(--st-off-ink); background: color-mix(in srgb, var(--st-off) 16%, transparent); border-color: color-mix(in srgb, var(--st-off) 34%, transparent); }
 .badge--off .badge__dot { background: var(--st-off); }
 

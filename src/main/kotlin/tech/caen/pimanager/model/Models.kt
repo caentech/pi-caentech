@@ -12,34 +12,56 @@ enum class DeviceState {
     @SerialName("not connected")
     NOT_CONNECTED,
 
+    @SerialName("connection setup")
+    CONNECTION_SETUP,
+
     @SerialName("new")
     NEW,
 
     @SerialName("ready")
     READY,
 
-    @SerialName("setup in progress")
-    SETUP_IN_PROGRESS;
+    @SerialName("setup")
+    SETUP;
 
     companion object {
         /** Parse une valeur de filtre (?state=) de façon tolérante. */
         fun fromSlug(value: String): DeviceState? = when (value.trim().lowercase()) {
             "not connected", "not_connected", "notconnected", "offline", "disconnected" -> NOT_CONNECTED
+            "connection setup", "connection_setup", "connectionsetup", "connect", "no key", "no_key" -> CONNECTION_SETUP
             "new" -> NEW
             "ready" -> READY
-            "setup in progress", "setup_in_progress", "setup", "in progress", "in_progress" -> SETUP_IN_PROGRESS
+            "setup", "setup in progress", "setup_in_progress", "in progress", "in_progress" -> SETUP
             else -> null
         }
     }
 }
 
 /**
- * Contenu du fichier de statut lu sur le Pi. Tous les champs sont optionnels
- * et tolérants : seul `state` pilote l'état. Les autres champs sont AFFICHÉS
- * en lecture seule (ils décrivent l'appli d'affichage, non encore pilotable).
+ * Fichier UNIQUE déposé/lu sur le Pi (chemin par défaut `~/.pi-manager/pi-swarm.json`).
+ * Il fusionne l'enrôlement (identité du device + marqueur `managedBy`) ET l'état
+ * applicatif (`state`, infos d'affichage) : c'est le seul fichier que pi-manager
+ * écrit (Configuration / Setup) et que l'appli d'affichage met à jour (à venir).
+ *
+ * Pilotage de l'état côté manager :
+ *  - `managedBy` == `pi-manager` => le Pi est enrôlé (fichier valide) ; sinon `new` ;
+ *  - `state` (`setup` à l'enrôlement, `ready` quand l'appli tourne) départage ensuite.
+ *
+ * Tous les champs sont optionnels et tolérants ; les champs d'affichage sont
+ * AFFICHÉS en lecture seule (ils décrivent l'appli d'affichage, non encore pilotable).
  */
 @Serializable
 data class PiStatus(
+    // --- Enrôlement (posé à la Configuration / au Setup) ---
+    val deviceId: String? = null,
+    val name: String? = null,
+    val host: String? = null,
+    val sshUser: String? = null,
+    /** Marqueur d'enrôlement : `pi-manager` si le fichier a bien été déposé par nous. */
+    val managedBy: String? = null,
+    val configuredAt: String? = null,
+    // --- État applicatif ---
+    /** `setup` à l'enrôlement, `ready` quand l'appli d'affichage tourne. */
     val state: String? = null,
     val displayType: String? = null,
     val appVersion: String? = null,
@@ -50,13 +72,18 @@ data class PiStatus(
     val uptime: String? = null,
     val message: String? = null,
     val updatedAt: String? = null,
-    // Progression du setup (état "setup in progress"), affichée en lecture.
+    // Progression du setup (état "setup"), affichée en lecture.
     val progress: Int? = null,
     val step: String? = null,
     val music: MusicStatus? = null,
     val slide: SlideStatus? = null,
     val pageCache: PageCacheStatus? = null,
-)
+) {
+    companion object {
+        /** Marqueur d'enrôlement écrit dans le fichier déposé sur le Pi. */
+        const val MANAGED_BY = "pi-manager"
+    }
+}
 
 @Serializable
 data class MusicStatus(val enabled: Boolean? = null, val track: String? = null)
@@ -96,25 +123,6 @@ data class UpdateDeviceRequest(
 @Serializable
 data class ConfigureRequest(
     val password: String,
-)
-
-/**
- * Contenu de `pi-swarm.json` déposé sur le Pi à la configuration : identité du
- * device, configuration associée (à venir) et statut côté manager (`setup` pour
- * l'instant). Sert de marqueur d'enrôlement « ce Pi est piloté par pi-manager ».
- */
-@Serializable
-data class PiSwarmConfig(
-    val deviceId: String,
-    val name: String,
-    val host: String,
-    val sshUser: String? = null,
-    /** Type d'affichage associé — non encore piloté (placeholder). */
-    val displayType: String? = null,
-    /** Statut côté manager : `setup` à l'enrôlement. */
-    val status: String = "setup",
-    val managedBy: String = "pi-manager",
-    val configuredAt: String? = null,
 )
 
 // --- Réponses ---
@@ -172,8 +180,9 @@ data class DeferredControl(
 data class Summary(
     val total: Int,
     val ready: Int,
-    val setupInProgress: Int,
+    val setup: Int,
     val new: Int,
+    val connectionSetup: Int,
     val notConnected: Int,
 )
 

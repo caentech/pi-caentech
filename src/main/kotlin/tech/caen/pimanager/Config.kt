@@ -18,17 +18,17 @@ object Config {
     /** Dossier local de stockage des fichiers "dropbox" par device. */
     val localFilesDir: String = env("PI_MANAGER_FILES_DIR", "data/files")
 
-    /** Chemin DISTANT du fichier de statut sur le Pi (lu via SSH). */
-    val remoteStatusPath: String = env("PI_MANAGER_STATUS_PATH", "~/.pi-manager/status.json")
-
     /** Dossier local des clés SSH générées par pi-manager (paire globale de la flotte). */
     val keysDir: String = env("PI_MANAGER_KEYS_DIR", "data/keys")
 
     /** Clé privée globale utilisée pour joindre les Pi configurés (`.pub` à côté). */
     val identityFile: String = env("PI_MANAGER_IDENTITY_FILE", "$keysDir/pi-swarm_ed25519")
 
-    /** Chemin DISTANT du fichier d'enrôlement `pi-swarm.json` (déposé à la configuration). */
-    val remoteSwarmPath: String = env("PI_MANAGER_SWARM_PATH", "~/.pi-manager/pi-swarm.json")
+    /**
+     * Chemin DISTANT du fichier UNIQUE pi-manager sur le Pi (enrôlement + état).
+     * Déposé à la Configuration / au Setup, lu à chaque SSH-pull.
+     */
+    val remoteStatePath: String = env("PI_MANAGER_STATE_PATH", "~/.pi-manager/pi-swarm.json")
 
     /** Dossier DISTANT où les fichiers sont déployés (scp). */
     val remoteFilesDir: String = env("PI_MANAGER_REMOTE_FILES_DIR", "~/.pi-manager/files")

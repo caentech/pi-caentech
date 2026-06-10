@@ -56,8 +56,7 @@ fun Application.module() {
         files = fileStore,
         eventBus = eventBus,
         scope = appScope,
-        remoteStatusPath = Config.remoteStatusPath,
-        remoteSwarmPath = Config.remoteSwarmPath,
+        remoteStatePath = Config.remoteStatePath,
         remoteFilesDir = Config.remoteFilesDir,
     )
 

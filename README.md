@@ -55,29 +55,38 @@ d'affichage n'est pas déployée (cliquer affiche une explication).
 Un **poller interne** interroge chaque device enregistré à intervalle régulier.
 L'état est **toujours dérivé du SSH-pull**, jamais poussé par le Pi :
 
-| Condition SSH-pull                                      | État renvoyé        |
-|---------------------------------------------------------|---------------------|
-| Connexion SSH refusée (`Permission denied`) — Pi en ligne, **non configuré** | `new`               |
-| Connexion SSH impossible (timeout, injoignable)         | `not connected`     |
-| SSH OK, pas de `status.json` **ni** de `pi-swarm.json`  | `new`               |
-| SSH OK, pas de `status.json` mais `pi-swarm.json` présent | `setup in progress` |
-| SSH OK, `status.json` présent, `state` = `ready`        | `ready`             |
-| SSH OK, `status.json` présent, autre `state`            | `setup in progress` |
+| Condition SSH-pull                                              | État renvoyé        |
+|-----------------------------------------------------------------|---------------------|
+| Connexion SSH impossible (timeout, injoignable)                 | `not connected`     |
+| Connexion SSH refusée (`Permission denied`) — Pi en ligne, **sans clé** | `connection setup`  |
+| SSH OK mais fichier `pi-swarm.json` **absent ou invalide**      | `new`               |
+| SSH OK, `pi-swarm.json` valide (`managedBy = pi-manager`), `state` ≠ `ready` | `setup`     |
+| SSH OK, `pi-swarm.json` valide, `state` = `ready`               | `ready`             |
+
+Le **fichier unique `pi-swarm.json`** (enrôlement + état) matérialise l'enrôlement :
+tant qu'il n'est pas lisible et marqué `managedBy = pi-manager`, l'état reste `new`.
 
 > Un Pi fraîchement flashé refuse l'accès par clé (`BatchMode=yes` → `Permission denied`) :
-> il est donc **en ligne mais non configuré** et apparaît en `new`, avec un bouton
-> **« Configuration »** (voir ci-dessous).
+> il est donc **en ligne mais sans clé** et apparaît en `connection setup`, avec un bouton
+> **« Configuration »** (voir ci-dessous). Une fois la clé posée mais le fichier absent
+> (ex. configuration interrompue), il bascule en `new` : relancer la configuration le répare.
 
 Un refresh à la demande est aussi disponible : `POST /api/devices/{id}/check`.
 
-### Format du fichier de statut
+### Format du fichier unique `pi-swarm.json`
 
-Fichier JSON lu sur le Pi (chemin par défaut `~/.pi-manager/status.json`).
-Seul `state` pilote l'état ; les autres champs sont **affichés en lecture seule**
-(ils décrivent l'appli d'affichage, non encore pilotable) :
+Un **seul fichier** est lu/écrit sur le Pi (chemin par défaut `~/.pi-manager/pi-swarm.json`).
+Il **fusionne** l'enrôlement (identité du device + marqueur `managedBy`) et l'état
+applicatif (`state` + infos d'affichage) :
 
 ```json
 {
+  "deviceId": "…",
+  "name": "rpi-salle-elixir",
+  "host": "rpi-salle-elixir.local",
+  "sshUser": "pi",
+  "managedBy": "pi-manager",
+  "configuredAt": "2026-06-10T08:00:00Z",
   "state": "ready",
   "displayType": "conference",
   "appVersion": "1.4.2",
@@ -90,8 +99,10 @@ Seul `state` pilote l'état ; les autres champs sont **affichés en lecture seul
 }
 ```
 
-`state` vaut `ready` ou `setup in progress`. Le parsing est tolérant
-(champs inconnus ignorés, champs manquants `null`).
+`managedBy = pi-manager` marque l'enrôlement (sinon `new`) ; `state` vaut `setup`
+(à l'enrôlement) ou `ready` (appli active). Les autres champs sont **affichés en
+lecture seule**. Le parsing est tolérant (champs inconnus ignorés, manquants `null`).
+L'appli d'affichage (à venir) met à jour ce fichier en **préservant `managedBy`**.
 
 ### Configuration (enrôlement d'un Pi vierge)
 
@@ -102,33 +113,17 @@ mais non configuré. C'est la **seule** opération qui s'authentifie par **mot d
 1. génère au besoin une **paire de clés globale** (`ssh-keygen ed25519`, stockée dans
    `data/keys/`, réutilisée pour toute la flotte) ;
 2. ajoute la **clé publique** à `~/.ssh/authorized_keys` du Pi (idempotent) ;
-3. dépose **`pi-swarm.json`** (cf. ci-dessous) avec `status: "setup"`.
+3. dépose le **fichier `pi-swarm.json`** (cf. ci-dessus) avec `state: "setup"` et
+   `managedBy: "pi-manager"`.
 
 Ensuite, la clé suffit : `ssh`/`scp` repassent par `-i data/keys/pi-swarm_ed25519` et le
-device bascule en `setup in progress`.
+device bascule en `setup`.
 
-#### Format de `pi-swarm.json`
+### Setup (réparation via clé)
 
-Fichier d'enrôlement déposé sur le Pi (chemin par défaut `~/.pi-manager/pi-swarm.json`) :
-
-```json
-{
-  "deviceId": "…",
-  "name": "rpi-salle-elixir",
-  "host": "rpi-salle-elixir.local",
-  "sshUser": "pi",
-  "displayType": null,
-  "status": "setup",
-  "managedBy": "pi-manager",
-  "configuredAt": "2026-06-10T08:00:00Z"
-}
-```
-
-### Setup (minimal, hérité)
-
-`POST /api/devices/{id}/setup` se limite à **installer le fichier de statut** (`status.json`)
-sur le Pi (`mkdir -p` + `scp`). Rien d'autre. L'enrôlement passe désormais par
-`/configure` ; `/setup` reste disponible pour compat.
+`POST /api/devices/{id}/setup` (re)dépose le **fichier `pi-swarm.json`** sur le Pi
+(`mkdir -p` + `scp`) en utilisant la **clé déjà posée** — sans mot de passe. Sert à
+réparer un device `new` (clé OK mais fichier absent/invalide).
 
 ## Configuration (variables d'environnement)
 
@@ -139,10 +134,9 @@ Toutes surchargeables ; les défauts conviennent à un usage local.
 | `PI_MANAGER_PORT`                   | `10028`                       | Port HTTP                                       |
 | `PI_MANAGER_DB_PATH`                | `data/pi-manager.db`          | Fichier SQLite (registre)                       |
 | `PI_MANAGER_FILES_DIR`              | `data/files`                  | Stockage local des fichiers (dropbox)           |
-| `PI_MANAGER_STATUS_PATH`            | `~/.pi-manager/status.json`   | Chemin **distant** du fichier de statut         |
 | `PI_MANAGER_KEYS_DIR`               | `data/keys`                   | Dossier local de la paire de clés globale       |
 | `PI_MANAGER_IDENTITY_FILE`          | `data/keys/pi-swarm_ed25519`  | Clé privée globale (`.pub` à côté)              |
-| `PI_MANAGER_SWARM_PATH`             | `~/.pi-manager/pi-swarm.json` | Chemin **distant** du fichier d'enrôlement      |
+| `PI_MANAGER_STATE_PATH`             | `~/.pi-manager/pi-swarm.json` | Chemin **distant** du fichier unique (enrôlement + état) |
 | `PI_MANAGER_REMOTE_FILES_DIR`       | `~/.pi-manager/files`         | Dossier **distant** de déploiement des fichiers |
 | `PI_MANAGER_POLL_INTERVAL_SECONDS`  | `30`                          | Intervalle du poller                            |
 | `PI_MANAGER_SSH_TIMEOUT_SECONDS`    | `10`                          | Timeout des opérations SSH                      |
@@ -178,7 +172,7 @@ PI_MANAGER_PORT=8080 PI_MANAGER_POLL_INTERVAL_SECONDS=15 ./gradlew run
 | Méthode | Chemin                         | Description                          |
 |---------|--------------------------------|--------------------------------------|
 | POST    | `/api/devices/{id}/configure`  | Enrôler un Pi vierge : clé SSH + `pi-swarm.json` (corps `{ "password" }`, mot de passe non stocké) |
-| POST    | `/api/devices/{id}/setup`      | Installer le fichier de statut `status.json` (scp, hérité) |
+| POST    | `/api/devices/{id}/setup`      | (Re)déposer `pi-swarm.json` via la clé déjà posée (réparation d'un device `new`) |
 
 ### Actions device (SSH)
 | Méthode | Chemin                                  | Description |

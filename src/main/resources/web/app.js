@@ -46,17 +46,20 @@ const DISPLAY_TYPES = {
 };
 
 const STATE_META = {
-  ready: { label: 'Ready', cls: 'ready' },
-  setup: { label: 'Setup in progress', cls: 'setup' },
-  new:   { label: 'New', cls: 'new' },
-  off:   { label: 'Not connected', cls: 'off' },
+  ready:   { label: 'Ready', cls: 'ready' },
+  setup:   { label: 'Setup', cls: 'setup' },
+  new:     { label: 'New', cls: 'new' },
+  connect: { label: 'À configurer', cls: 'connect' },
+  off:     { label: 'Not connected', cls: 'off' },
 };
 
 /* backend state slug -> frontend state key */
 const STATE_KEY = {
   'ready': 'ready',
-  'setup in progress': 'setup',
+  'setup': 'setup',
+  'setup in progress': 'setup',   // tolérance rétro-compat
   'new': 'new',
+  'connection setup': 'connect',
   'not connected': 'off',
 };
 
@@ -343,7 +346,7 @@ function render() {
 function counts() {
   return {
     ready: DEVICES.filter(d => d.state === 'ready').length,
-    setup: DEVICES.filter(d => d.state === 'setup' || d.state === 'new').length,
+    setup: DEVICES.filter(d => d.state === 'setup' || d.state === 'new' || d.state === 'connect').length,
     off: DEVICES.filter(d => d.state === 'off').length,
   };
 }
@@ -370,6 +373,7 @@ function toolbar() {
     ['ready', 'Ready', 'var(--st-ready)'],
     ['setup', 'Setup', 'var(--st-setup)'],
     ['new', 'New', 'var(--st-new)'],
+    ['connect', 'À configurer', 'var(--st-connect)'],
     ['off', 'Offline', 'var(--st-off)'],
   ].map(([k, l, c]) => `<button class="chip ${view.filter === k ? 'is-active' : ''}" data-filter="${k}">${c ? `<span class="chip__dot" style="background:${c}"></span>` : ''}${l}</button>`).join('');
 
@@ -416,12 +420,19 @@ function deviceCard(d) {
         <div class="identity__row"><span class="identity__k">IP</span><span class="identity__v">${esc(d.ip)}</span></div>
         <div class="identity__row"><span class="identity__k">host</span><span class="identity__v">${esc(d.hostname)}</span></div>
       </div>`;
-  } else if (d.state === 'new') {
+  } else if (d.state === 'connect') {
     body = `
-      <div class="newprompt">En ligne mais non configuré. Lance la <b>Configuration</b> pour poser la clé SSH et l'enrôler dans le parc.</div>
+      <div class="newprompt">En ligne mais sans clé SSH. Lance la <b>Configuration</b> pour poser la clé et l'enrôler dans le parc.</div>
       <div class="identity">
         <div class="identity__row"><span class="identity__k">host</span><span class="identity__v">${esc(d.hostname)}</span></div>
         <div class="identity__row"><span class="identity__k">MAC</span><span class="identity__v">${esc(d.mac)}</span></div>
+      </div>`;
+  } else if (d.state === 'new') {
+    body = `
+      <div class="newprompt">Clé SSH en place mais le fichier <span class="mono">pi-swarm.json</span> est absent ou invalide. Relance la <b>Configuration</b> pour réparer l'enrôlement.</div>
+      <div class="identity">
+        <div class="identity__row"><span class="identity__k">IP</span><span class="identity__v">${esc(d.ip)}</span></div>
+        <div class="identity__row"><span class="identity__k">host</span><span class="identity__v">${esc(d.hostname)}</span></div>
       </div>`;
   } else {
     body = `
@@ -442,7 +453,7 @@ function deviceCard(d) {
     foot = `<button class="btn btn--ssh btn--sm" data-ssh="${d.id}">${ICN.terminal} SSH</button>
       <div class="toolbar__spacer" style="flex:1"></div>
       <button class="btn btn--sm" data-open="${d.id}">Suivre ${ICN.arrow}</button>`;
-  } else if (d.state === 'new') {
+  } else if (d.state === 'connect' || d.state === 'new') {
     foot = `<button class="btn btn--primary btn--sm" data-setup="${d.id}">Configuration</button>
       <div class="toolbar__spacer" style="flex:1"></div>
       <button class="btn btn--sm" data-open="${d.id}">Détail ${ICN.arrow}</button>`;
@@ -712,10 +723,16 @@ function renderDetail() {
       </div>
       <div class="setting__hint" style="margin-top:14px">Les contrôles d'affichage seront disponibles une fois le setup terminé.</div>
     </div>`;
+  } else if (d.state === 'connect') {
+    settings = `<div class="panel">
+      <div class="panel__title">Connexion à configurer</div>
+      <div class="setting__hint" style="margin-bottom:14px">Ce Raspberry Pi est en ligne mais n'a pas encore de clé SSH. La configuration y dépose la clé SSH de pi-manager et le fichier <span class="mono">pi-swarm.json</span> (enrôlement + état).</div>
+      <button class="btn btn--primary" id="run-setup">Configuration</button>
+    </div>`;
   } else if (d.state === 'new') {
     settings = `<div class="panel">
-      <div class="panel__title">Device non configuré</div>
-      <div class="setting__hint" style="margin-bottom:14px">Ce Raspberry Pi est en ligne mais n'a pas encore été enrôlé. La configuration y dépose la clé SSH de pi-manager et le fichier <span class="mono">pi-swarm.json</span>.</div>
+      <div class="panel__title">Enrôlement incomplet</div>
+      <div class="setting__hint" style="margin-bottom:14px">La clé SSH fonctionne, mais le fichier <span class="mono">pi-swarm.json</span> est absent ou invalide. Relance la configuration pour le redéposer et enrôler le Pi.</div>
       <button class="btn btn--primary" id="run-setup">Configuration</button>
     </div>`;
   } else {
@@ -732,7 +749,7 @@ function renderDetail() {
   const actions = `<div class="panel">
     <div class="panel__title">Actions device</div>
     <div class="actions-row">
-      ${d.state === 'new'
+      ${d.state === 'new' || d.state === 'connect'
         ? `<button class="btn btn--primary btn--block" id="configure">Configuration</button>`
         : `<button class="btn" id="restart-app" ${d.state === 'off' ? 'disabled' : ''}>${ICN.refresh} Redémarrer l'affichage</button>
       <button class="btn btn--danger" id="reboot" ${d.state === 'off' ? 'disabled' : ''}>${ICN.reboot} Redémarrer</button>
