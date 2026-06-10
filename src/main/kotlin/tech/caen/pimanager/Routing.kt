@@ -19,10 +19,8 @@ import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import io.ktor.server.websocket.webSocket
-import io.ktor.websocket.Frame
+import io.ktor.server.http.content.staticResources
 import io.ktor.http.CacheControl
-import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.flow.collect
 import tech.caen.pimanager.model.ApiError
 import tech.caen.pimanager.model.CreateDeviceRequest
@@ -194,16 +192,8 @@ fun Application.configureRouting(service: DeviceService, eventBus: EventBus, sta
             }
         }
 
-        // --- Temps réel : WebSocket ---
-        webSocket("/ws") {
-            try {
-                eventBus.events.collect { event ->
-                    send(Frame.Text(appJson.encodeToString(StreamEvent.serializer(), event)))
-                }
-            } catch (_: ClosedReceiveChannelException) {
-                // client déconnecté
-            }
-        }
+        // --- Frontend statique (SPA) servi à la racine ---
+        staticResources("/", "web", index = "index.html")
     }
 }
 

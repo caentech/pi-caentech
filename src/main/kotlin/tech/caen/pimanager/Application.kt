@@ -15,7 +15,6 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.respond
-import io.ktor.server.websocket.WebSockets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -81,11 +80,6 @@ fun Application.module() {
     install(CallLogging) {
         level = Level.INFO
         filter { it.request.local.uri.startsWith("/api") }
-    }
-
-    install(WebSockets) {
-        pingPeriodMillis = 15_000
-        timeoutMillis = 60_000
     }
 
     install(StatusPages) {

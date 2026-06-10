@@ -20,13 +20,34 @@ Prérequis : un JDK 17+ et un accès SSH par clé aux Pi.
 ./gradlew run
 ```
 
-Le serveur démarre sur **http://localhost:10028**. Vérification :
+Le serveur démarre sur **http://localhost:10028**. Il sert à la fois l'**API**
+(`/api/...`) et le **frontend** (interface web à la racine) :
 
-```bash
-curl http://localhost:10028/api/health
-```
+- Interface : <http://localhost:10028/>
+- Santé : `curl http://localhost:10028/api/health`
 
-> CORS est activé (toutes origines par défaut) pour le frontend local.
+> CORS est activé (toutes origines par défaut) pour un éventuel frontend servi
+> séparément.
+
+## Frontend
+
+Une SPA légère (HTML/CSS/JS sans build) est servie par Ktor depuis
+`src/main/resources/web/` et consomme l'API. Elle reprend le design Caen.tech
+(jaune `#ffdd00`, Arimo / JetBrains Mono) :
+
+- **Vue flotte** : grille de cartes par device, compteurs par état
+  (ready / en setup / offline), filtres par état et par type d'affichage,
+  recherche, ajout de device.
+- **Vue détail** : identité technique, connexion SSH rapide (copier / ouvrir
+  un terminal), dropbox (upload + déploiement scp + suppression), journal
+  d'état (logs SSH), actions device (reboot / shutdown).
+- **Temps réel** : la SPA s'abonne à **SSE** (`/api/stream`) et rafraîchit
+  automatiquement à chaque changement d'état détecté par le poller.
+
+Les **contrôles de l'appli d'affichage** (musique, type d'affichage, cache,
+slide, durée, redémarrage de l'app) sont **affichés en lecture seule** : ils
+reflètent le fichier de statut mais ne sont pas pilotables tant que l'appli
+d'affichage n'est pas déployée (cliquer affiche une explication).
 
 ## Modèle : détection d'état par SSH-pull (aucun agent sur le Pi)
 
@@ -148,8 +169,10 @@ PI_MANAGER_PORT=8080 PI_MANAGER_POLL_INTERVAL_SECONDS=15 ./gradlew run
 ### Temps réel
 | Type | Chemin         | Description                                          |
 |------|----------------|------------------------------------------------------|
-| WS   | `/ws`          | Push des changements d'état et résultats d'action    |
-| SSE  | `/api/stream`  | Idem en Server-Sent Events                            |
+| SSE  | `/api/stream`  | Push des changements d'état et résultats d'action    |
+
+> Le temps réel passe **uniquement par SSE** (Server-Sent Events) : flux
+> unidirectionnel serveur → client, plus simple qu'un WebSocket pour ce besoin.
 
 ### Santé
 | Méthode | Chemin         | Description |
@@ -187,6 +210,11 @@ src/main/kotlin/tech/caen/pimanager/
 └── service/
     ├── DeviceService.kt    # orchestration (état, setup, actions, fichiers, logs)
     ├── Poller.kt           # coroutine de SSH-pull périodique
-    ├── EventBus.kt         # bus temps réel (WS/SSE)
+    ├── EventBus.kt         # bus temps réel (SSE)
     └── FileStore.kt        # stockage local des fichiers par device
+
+src/main/resources/web/    # frontend statique servi par Ktor
+├── index.html
+├── styles.css             # design tokens Caen.tech
+└── app.js                 # vues flotte/détail, fetch API + EventSource (SSE)
 ```

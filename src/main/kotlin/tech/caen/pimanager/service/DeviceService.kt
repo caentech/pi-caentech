@@ -300,6 +300,8 @@ class DeviceService(
             state = stateOf(record),
             displayType = status?.displayType,
             appVersion = status?.appVersion,
+            sshCommand = sshCommand(record),
+            status = status,
             lastCheckedAt = record.lastCheckedAt?.toIso(),
             lastError = record.lastError,
         )

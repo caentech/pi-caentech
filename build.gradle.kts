@@ -19,7 +19,6 @@ dependencies {
     implementation(libs.ktor.server.cors)
     implementation(libs.ktor.server.status.pages)
     implementation(libs.ktor.server.call.logging)
-    implementation(libs.ktor.server.websockets)
 
     implementation(libs.exposed.core)
     implementation(libs.exposed.jdbc)

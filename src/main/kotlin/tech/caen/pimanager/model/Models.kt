@@ -45,8 +45,14 @@ data class PiStatus(
     val appVersion: String? = null,
     val siteUrl: String? = null,
     val hostname: String? = null,
+    val ip: String? = null,
+    val mac: String? = null,
+    val uptime: String? = null,
     val message: String? = null,
     val updatedAt: String? = null,
+    // Progression du setup (état "setup in progress"), affichée en lecture.
+    val progress: Int? = null,
+    val step: String? = null,
     val music: MusicStatus? = null,
     val slide: SlideStatus? = null,
     val pageCache: PageCacheStatus? = null,
@@ -56,10 +62,19 @@ data class PiStatus(
 data class MusicStatus(val enabled: Boolean? = null, val track: String? = null)
 
 @Serializable
-data class SlideStatus(val current: Int? = null, val total: Int? = null)
+data class SlideStatus(
+    val current: Int? = null,
+    val total: Int? = null,
+    val title: String? = null,
+    val dwell: Int? = null,
+)
 
 @Serializable
-data class PageCacheStatus(val lastClearedAt: String? = null)
+data class PageCacheStatus(
+    val lastClearedAt: String? = null,
+    /** "ok" (à jour) ou "stale" (périmé). */
+    val status: String? = null,
+)
 
 // --- Requêtes ---
 
@@ -88,6 +103,8 @@ data class DeviceOverview(
     val state: DeviceState,
     val displayType: String? = null,
     val appVersion: String? = null,
+    val sshCommand: String,
+    val status: PiStatus? = null,
     val lastCheckedAt: String? = null,
     val lastError: String? = null,
 )
