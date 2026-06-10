@@ -466,13 +466,8 @@ function deviceCard(d) {
         <div class="identity__row"><span class="identity__k">host</span><span class="identity__v">${esc(d.hostname)}</span></div>
       </div>`;
   } else if (d.state === 'setup') {
-    const pct = d.progress != null ? d.progress + '%' : '…';
     body = `
-      <div class="progress">
-        <div class="progress__meta"><span>Installation en cours</span><b>${pct}</b></div>
-        <div class="progress__track"><div class="progress__fill" style="width:${d.progress != null ? d.progress : 45}%"></div></div>
-        <div class="progress__steps">${esc(d.step)}</div>
-      </div>
+      <div class="newprompt">Enrôlé et prêt à être configuré. Lance le <b>setup</b> pour déployer l'application sur le Pi et la démarrer — le device passera alors en <b>ready</b>.</div>
       <div class="identity">
         <div class="identity__row"><span class="identity__k">IP</span><span class="identity__v">${esc(d.ip)}</span></div>
         <div class="identity__row"><span class="identity__k">host</span><span class="identity__v">${esc(d.hostname)}</span></div>
@@ -507,9 +502,9 @@ function deviceCard(d) {
       <div class="minidrop" data-drop="${d.id}">${ICN.upload} Déposer</div>
       <button class="btn btn--sm" data-open="${d.id}">Détail ${ICN.arrow}</button>`;
   } else if (d.state === 'setup') {
-    foot = `<button class="btn btn--ssh btn--sm" data-ssh="${d.id}">${ICN.terminal} SSH</button>
+    foot = `<button class="btn btn--primary btn--sm" data-deploy="${d.id}">Lancer le setup</button>
       <div class="toolbar__spacer" style="flex:1"></div>
-      <button class="btn btn--sm" data-open="${d.id}">Suivre ${ICN.arrow}</button>`;
+      <button class="btn btn--sm" data-open="${d.id}">Détail ${ICN.arrow}</button>`;
   } else if (d.state === 'connect' || d.state === 'new') {
     foot = `<button class="btn btn--primary btn--sm" data-setup="${d.id}">Configuration</button>
       <div class="toolbar__spacer" style="flex:1"></div>
@@ -610,6 +605,7 @@ function bindFleet() {
   $$('[data-open]').forEach(b => b.onclick = () => openDetail(b.dataset.open));
   $$('[data-ssh]').forEach(b => b.onclick = (e) => { e.stopPropagation(); launchSSH(DEVICES.find(d => d.id === b.dataset.ssh)); });
   $$('[data-setup]').forEach(b => b.onclick = () => { const d = DEVICES.find(x => x.id === b.dataset.setup); if (d) openConfigure(d); });
+  $$('[data-deploy]').forEach(b => b.onclick = () => { const d = DEVICES.find(x => x.id === b.dataset.deploy); if (d) runSetup(d, b); });
   bindMiniDrops();
 }
 
@@ -771,14 +767,10 @@ function renderDetail() {
       </div>
     </div>`;
   } else if (d.state === 'setup') {
-    const pct = d.progress != null ? d.progress + '%' : '…';
     settings = `<div class="panel">
-      <div class="panel__title">Installation en cours</div>
-      <div class="progress">
-        <div class="progress__meta"><span>${esc(d.step)}</span><b>${pct}</b></div>
-        <div class="progress__track"><div class="progress__fill" style="width:${d.progress != null ? d.progress : 45}%"></div></div>
-      </div>
-      <div class="setting__hint" style="margin-top:14px">Les contrôles d'affichage seront disponibles une fois le setup terminé.</div>
+      <div class="panel__title">Setup applicatif</div>
+      <div class="setting__hint" style="margin-bottom:14px">Le Pi est enrôlé. Le setup envoie l'application (zip du répertoire <span class="mono">pi-app</span>), la décompresse sur le Pi et lance <span class="mono">main.sh</span>. À la fin, l'état bascule en <b>ready</b>.</div>
+      <button class="btn btn--primary" id="run-deploy">Lancer le setup</button>
     </div>`;
   } else if (d.state === 'new') {
     settings = `<div class="panel">
@@ -886,6 +878,7 @@ function bindDetail(d) {
 
   $('#run-setup') && ($('#run-setup').onclick = () => openConfigure(d));
   $('#configure') && ($('#configure').onclick = () => openConfigure(d));
+  $('#run-deploy') && ($('#run-deploy').onclick = (e) => runSetup(d, e.currentTarget));
 
   $('#reboot') && ($('#reboot').onclick = () => confirmAction({
     title: 'Redémarrer le device ?',
@@ -918,6 +911,20 @@ function bindDetail(d) {
     confirmLabel: 'Supprimer', danger: true,
     onConfirm: () => deleteFile(d.id, b.dataset.del, b.dataset.name),
   }));
+}
+
+/* setup — déploie l'application sur le Pi (zip → scp → unzip → main.sh) puis bascule en ready */
+async function runSetup(d, btn) {
+  if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = 'Setup en cours…'; }
+  try {
+    const r = await api(`/devices/${d.id}/setup`, { method: 'POST' });
+    toast(r.ok ? 'Setup terminé' : 'Setup échoué', r.message || r.error || '', r.ok ? 'ok' : 'err');
+    await loadFleet();
+    if (view.name === 'detail' && view.deviceId === d.id) openDetail(d.id);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || 'Lancer le setup'; }
+    toast('Setup échoué', e.message, 'err');
+  }
 }
 
 async function deviceAction(id, action, okMsg) {

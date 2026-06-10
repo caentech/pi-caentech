@@ -22,9 +22,11 @@ import tech.caen.pimanager.model.UpdateDeviceRequest
 import tech.caen.pimanager.notFound
 import tech.caen.pimanager.nowIso
 import tech.caen.pimanager.nowMillis
+import tech.caen.pimanager.ssh.ExecResult
 import tech.caen.pimanager.ssh.SshProvisioner
 import tech.caen.pimanager.ssh.SshService
 import tech.caen.pimanager.toIso
+import tech.caen.pimanager.zipDirectoryContents
 import java.io.File
 
 /**
@@ -41,6 +43,8 @@ class DeviceService(
     private val scope: CoroutineScope,
     private val remoteStatePath: String,
     private val remoteFilesDir: String,
+    private val appDir: String,
+    private val remoteAppDir: String,
 ) {
     private val log = LoggerFactory.getLogger(DeviceService::class.java)
 
@@ -179,34 +183,112 @@ class DeviceService(
         }
     }
 
-    // --- Setup ---
+    // --- Setup (déploiement applicatif) ---
 
     /**
-     * (Ré)installe le fichier pi-manager via la clé déjà en place (mkdir + scp).
-     * Sert à réparer un device `new` (clé OK mais fichier absent/invalide) sans
-     * redemander le mot de passe.
+     * Phase de setup d'un Pi enrôlé (état `setup`) : zippe le répertoire applicatif
+     * local, l'envoie sur le Pi, le décompresse puis lance `main.sh`. En cas de succès,
+     * bascule l'état du fichier pi-swarm.json sur le Pi en `ready` (le marqueur
+     * `managedBy` est préservé) et re-checke pour refléter `ready` immédiatement.
      */
     suspend fun setup(record: DeviceRecord): ActionResult {
-        val seed = appJson.encodeToString(PiStatus.serializer(), seedStatus(record))
-        val tmp = File.createTempFile("pi-state", ".json")
+        val source = File(appDir)
+        if (!source.isDirectory) {
+            return ActionResult(
+                ok = false,
+                action = "setup",
+                error = "Répertoire applicatif introuvable: ${source.absolutePath}",
+                message = "Répertoire applicatif introuvable",
+            )
+        }
+        val zip = File.createTempFile("pi-app", ".zip")
         try {
-            tmp.writeText(seed)
+            zipDirectoryContents(source, zip)
+            val remoteZip = "$remoteAppDir.zip"
+
+            // 1. Copie du zip (le dossier parent est créé au besoin).
+            val parent = remoteAppDir.substringBeforeLast('/', "")
+            if (parent.isNotBlank()) ssh.exec(record.host, record.sshUser, "mkdir -p $parent")
+            val sent = ssh.scpTo(record.host, record.sshUser, zip.absolutePath, remoteZip)
+            if (!sent.success) {
+                return ActionResult(
+                    ok = false,
+                    action = "setup",
+                    exitCode = sent.exitCode,
+                    error = sent.stderr.trim().ifBlank { null },
+                    message = "Échec de la copie de l'application sur le Pi",
+                )
+            }
+
+            // 2. Décompression (dossier remis à zéro) puis lancement de main.sh.
+            val deployCmd = "rm -rf $remoteAppDir && mkdir -p $remoteAppDir && " +
+                "unzip -o $remoteZip -d $remoteAppDir && rm -f $remoteZip && " +
+                "chmod +x $remoteAppDir/main.sh && bash $remoteAppDir/main.sh"
+            val run = ssh.exec(record.host, record.sshUser, deployCmd)
+            if (!run.success) {
+                return ActionResult(
+                    ok = false,
+                    action = "setup",
+                    exitCode = run.exitCode,
+                    output = run.stdout.trim().ifBlank { null },
+                    error = run.stderr.trim().ifBlank { null },
+                    message = "Échec du déploiement / lancement de main.sh",
+                )
+            }
+
+            // 3. Bascule l'état du Pi en `ready`.
+            val ready = markReady(record)
+            if (!ready.success) {
+                return ActionResult(
+                    ok = false,
+                    action = "setup",
+                    exitCode = ready.exitCode,
+                    output = run.stdout.trim().ifBlank { null },
+                    error = ready.stderr.trim().ifBlank { null },
+                    message = "Application déployée mais bascule en `ready` échouée",
+                )
+            }
+
+            // 4. Re-check pour refléter `ready` tout de suite + événement temps réel.
+            runCatching { check(record) }
+            eventBus.publish(StreamEvent("device.setup", nowIso(), record.id, message = "Setup terminé : application déployée et lancée"))
+            return ActionResult(
+                ok = true,
+                action = "setup",
+                exitCode = run.exitCode,
+                output = run.stdout.trim().ifBlank { null },
+                message = "Application déployée et lancée — device prêt (ready)",
+            )
+        } finally {
+            zip.delete()
+        }
+    }
+
+    /**
+     * Réécrit le fichier pi-swarm.json du Pi avec `state = ready`. On relit d'abord le
+     * fichier existant pour préserver ses champs (notamment `managedBy`) ; à défaut on
+     * repart du seed.
+     */
+    private suspend fun markReady(record: DeviceRecord): ExecResult {
+        val read = ssh.readFile(record.host, record.sshUser, remoteStatePath)
+        val current = if (read.success) {
+            runCatching { appJson.decodeFromString<PiStatus>(read.stdout.trim()) }.getOrNull()
+        } else {
+            null
+        }
+        val base = current ?: seedStatus(record)
+        val ready = base.copy(
+            managedBy = PiStatus.MANAGED_BY,
+            state = "ready",
+            message = "Setup terminé par pi-manager : application déployée et lancée.",
+            updatedAt = nowIso(),
+        )
+        val tmp = File.createTempFile("pi-state", ".json")
+        return try {
+            tmp.writeText(appJson.encodeToString(PiStatus.serializer(), ready))
             val dir = remoteStatePath.substringBeforeLast('/', "")
             if (dir.isNotBlank()) ssh.exec(record.host, record.sshUser, "mkdir -p $dir")
-            val res = ssh.scpTo(record.host, record.sshUser, tmp.absolutePath, remoteStatePath)
-            if (res.success) {
-                // Re-checke pour refléter le nouvel état tout de suite.
-                runCatching { check(record) }
-                eventBus.publish(StreamEvent("device.setup", nowIso(), record.id, message = "Fichier pi-manager installé"))
-            }
-            return ActionResult(
-                ok = res.success,
-                action = "setup",
-                exitCode = res.exitCode,
-                output = res.stdout.trim().ifBlank { null },
-                error = res.stderr.trim().ifBlank { null },
-                message = if (res.success) "Fichier pi-manager installé dans $remoteStatePath" else "Échec de l'installation du fichier",
-            )
+            ssh.scpTo(record.host, record.sshUser, tmp.absolutePath, remoteStatePath)
         } finally {
             tmp.delete()
         }

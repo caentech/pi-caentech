@@ -58,6 +58,8 @@ fun Application.module() {
         scope = appScope,
         remoteStatePath = Config.remoteStatePath,
         remoteFilesDir = Config.remoteFilesDir,
+        appDir = Config.appDir,
+        remoteAppDir = Config.remoteAppDir,
     )
 
     install(ContentNegotiation) { json(appJson) }

@@ -33,6 +33,15 @@ object Config {
     /** Dossier DISTANT où les fichiers sont déployés (scp). */
     val remoteFilesDir: String = env("PI_MANAGER_REMOTE_FILES_DIR", "~/.pi-manager/files")
 
+    /**
+     * Dossier LOCAL de l'application à déployer sur le Pi pendant la phase de setup.
+     * Son contenu est zippé, copié puis décompressé côté Pi, et `main.sh` est lancé.
+     */
+    val appDir: String = env("PI_MANAGER_APP_DIR", "pi-app")
+
+    /** Dossier DISTANT où l'application est décompressée et lancée (`<dir>/main.sh`). */
+    val remoteAppDir: String = env("PI_MANAGER_REMOTE_APP_DIR", "~/.pi-manager/app")
+
     /** Intervalle du poller interne (secondes). */
     val pollIntervalSeconds: Long = env("PI_MANAGER_POLL_INTERVAL_SECONDS", "30").toLong()
 
