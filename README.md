@@ -5,8 +5,10 @@ la conférence **Caen.tech**). Cette première version se concentre **uniquement
 sur la gestion des Pi.
 
 L'app tourne **localement sur un Mac**. Elle ne déploie aucun agent sur les Pi :
-elle shelle vers les binaires système `ssh` / `scp` et réutilise donc directement
-votre configuration `~/.ssh` (clés, alias d'hôte, `~/.ssh/config`).
+elle shelle vers les binaires système `ssh` / `scp` mais utilise **uniquement sa
+propre clé** (générée dans `data/keys/`), jamais votre `~/.ssh` — les commandes
+passent `-F /dev/null -o IdentitiesOnly=yes` pour ignorer config, agent et clés
+par défaut de l'utilisateur.
 
 ## Stack
 
@@ -15,7 +17,8 @@ Kotlin · Ktor (Netty) · kotlinx.serialization · coroutines · Exposed + SQLit
 
 ## Lancement local
 
-Prérequis : un JDK 17+ et un accès SSH par clé aux Pi.
+Prérequis : un JDK 17+. L'accès SSH aux Pi est géré par pi-manager via sa propre
+clé (générée automatiquement, posée sur chaque Pi par la Configuration).
 
 ```bash
 ./gradlew run

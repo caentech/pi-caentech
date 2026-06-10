@@ -18,16 +18,19 @@ data class ExecResult(
 }
 
 /**
- * Encapsule TOUT l'accès aux Pi : on shelle vers les binaires système `ssh`/`scp`
- * (réutilise donc ~/.ssh : clés, config, alias d'hôte). Aucun agent côté Pi.
+ * Encapsule TOUT l'accès aux Pi : on shelle vers les binaires système `ssh`/`scp`,
+ * mais pi-manager n'utilise QUE sa propre clé — jamais le `~/.ssh` de l'utilisateur :
  *
- * - BatchMode=yes  : pas de prompt interactif (échec net si pas de clé).
- * - ConnectTimeout : coupe vite les hôtes injoignables.
+ * - `-F /dev/null`         : ignore `~/.ssh/config` (alias, IdentityFile, etc.).
+ * - `IdentitiesOnly=yes`   : n'offre que les clés passées via `-i` (ni agent, ni clés
+ *   par défaut `~/.ssh/id_*`).
+ * - BatchMode=yes          : pas de prompt interactif (échec net si pas de clé).
+ * - ConnectTimeout         : coupe vite les hôtes injoignables.
  *
  * `identityFile` est la clé privée globale posée par la Configuration : on l'offre
- * via `-i` dès qu'elle existe (additif — les Pi joignables par `~/.ssh` continuent
- * de marcher). Tant qu'elle n'est pas posée, `BatchMode=yes` provoque l'échec net
- * `Permission denied` qui signale un Pi en ligne mais non configuré.
+ * via `-i` dès qu'elle existe. Tant qu'elle n'est pas posée, aucune identité n'est
+ * proposée et `BatchMode=yes` provoque l'échec net `Permission denied` qui signale
+ * un Pi en ligne mais sans notre clé (état `new`).
  */
 class SshService(private val timeoutSeconds: Long, private val identityFile: String? = null) {
 
@@ -36,7 +39,13 @@ class SshService(private val timeoutSeconds: Long, private val identityFile: Str
     fun target(host: String, user: String?): String =
         if (user.isNullOrBlank()) host else "$user@$host"
 
-    /** `-i <clé>` uniquement si la clé globale a déjà été générée. */
+    /** Isole pi-manager de `~/.ssh` : ni config, ni clés/agent de l'utilisateur. */
+    private fun isolationArgs(): List<String> = listOf(
+        "-F", "/dev/null",
+        "-o", "IdentitiesOnly=yes",
+    )
+
+    /** `-i <clé>` uniquement si la clé globale de l'app a déjà été générée. */
     private fun identityArgs(): List<String> =
         identityFile?.takeIf { File(it).exists() }?.let { listOf("-i", it) } ?: emptyList()
 
@@ -45,7 +54,7 @@ class SshService(private val timeoutSeconds: Long, private val identityFile: Str
         "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ConnectTimeout=$timeoutSeconds",
-    ) + identityArgs()
+    ) + isolationArgs() + identityArgs()
 
     private fun scpArgs(): List<String> = listOf(
         "scp",
@@ -53,7 +62,18 @@ class SshService(private val timeoutSeconds: Long, private val identityFile: Str
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ConnectTimeout=$timeoutSeconds",
         "-p",
-    ) + identityArgs()
+    ) + isolationArgs() + identityArgs()
+
+    /**
+     * Commande `ssh` lisible (affichée dans l'UI / copiée dans le presse-papier).
+     * Pointe vers la clé de l'app via `-i <chemin absolu>` dès qu'elle existe, pour
+     * que l'utilisateur se connecte avec la même identité que pi-manager.
+     */
+    fun command(host: String, user: String?): String {
+        val key = identityFile?.let { File(it) }?.takeIf { it.exists() }?.absolutePath
+        val identity = if (key != null) "-i $key " else ""
+        return "ssh $identity${target(host, user)}"
+    }
 
     /** Teste la connexion SSH (commande triviale). */
     suspend fun testConnection(host: String, user: String?): ExecResult =
@@ -75,7 +95,7 @@ class SshService(private val timeoutSeconds: Long, private val identityFile: Str
 
     /** Ouvre un terminal SSH dans Terminal.app (macOS) via osascript. Fire-and-forget. */
     fun openTerminal(host: String, user: String?): Boolean {
-        val sshCmd = "ssh ${target(host, user)}"
+        val sshCmd = command(host, user)
         val script = """
             tell application "Terminal"
                 do script "$sshCmd"
