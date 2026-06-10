@@ -44,8 +44,8 @@ fun main() {
 fun Application.module() {
     val startedAt = nowMillis()
     val repo = DeviceRepository()
-    val ssh = SshService(Config.sshTimeoutSeconds, Config.identityFile)
-    val provisioner = SshProvisioner(Config.identityFile, Config.sshTimeoutSeconds)
+    val ssh = SshService(Config.sshTimeoutSeconds, Config.identityFile, Config.knownHostsFile)
+    val provisioner = SshProvisioner(Config.identityFile, Config.knownHostsFile, Config.sshTimeoutSeconds)
     val fileStore = FileStore(Config.localFilesDir)
     val eventBus = EventBus()
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

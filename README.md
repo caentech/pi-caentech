@@ -111,16 +111,58 @@ L'appli d'affichage (à venir) met à jour ce fichier en **préservant `managedB
 
 `POST /api/devices/{id}/configure` (corps `{ "password": "..." }`) enrôle un Pi en ligne
 mais non configuré. C'est la **seule** opération qui s'authentifie par **mot de passe**
-(via sshj) ; le mot de passe **n'est jamais stocké**. Elle :
+(via sshj) ; le mot de passe **n'est jamais stocké** (ni en base, ni sur disque, ni dans
+les logs) et ne sert qu'à cette passe de bootstrap. Elle, de façon **idempotente** :
 
 1. génère au besoin une **paire de clés globale** (`ssh-keygen ed25519`, stockée dans
    `data/keys/`, réutilisée pour toute la flotte) ;
-2. ajoute la **clé publique** à `~/.ssh/authorized_keys` du Pi (idempotent) ;
-3. dépose le **fichier `pi-swarm.json`** (cf. ci-dessus) avec `state: "setup"` et
-   `managedBy: "pi-manager"`.
+2. vérifie la **clé d'hôte du Pi en TOFU** (trust on first use) : mémorisée à la 1re vue
+   dans le `known_hosts` de l'app (`data/keys/known_hosts`), connexion **refusée** si elle
+   change ensuite (protection MITM). L'**empreinte SHA256** est journalisée et renvoyée
+   dans la réponse (`output`) pour vérification ;
+3. ajoute la **clé publique** à `~/.ssh/authorized_keys` du Pi (`~/.ssh` en 700,
+   `authorized_keys` en 600 ; pas de doublon) ;
+4. installe un **drop-in sudoers NOPASSWD** `/etc/sudoers.d/pi-manager`
+   (`root:root`, `0440`), **validé par `visudo -cf` AVANT** d'être mis en place. C'est
+   l'**unique** écriture privilégiée : elle pipe le mot de passe à `sudo -S`. Le drop-in
+   autorise sans mot de passe : `/opt/pi-manager/setup.sh`, `/opt/pi-manager/update.sh`,
+   `/usr/bin/systemctl`, `/sbin/reboot`, `/sbin/shutdown`. Le répertoire `/opt/pi-manager`
+   est créé et **donné au compte de déploiement** pour que la phase de setup (par clé, sans
+   mot de passe) y dépose `setup.sh` / `update.sh` aux chemins autorisés ;
+5. dépose le **fichier `pi-swarm.json`** (cf. ci-dessus) avec `state: "setup"` et
+   `managedBy: "pi-manager"` — **en dernier**, donc un échec de l'étape sudoers ne laisse
+   **pas** de device à moitié enrôlé (l'enrôlement reste ré-exécutable sans effet de bord).
 
-Ensuite, la clé suffit : `ssh`/`scp` repassent par `-i data/keys/pi-swarm_ed25519` et le
+Ensuite, **la clé suffit et le sudo ne demande plus de mot de passe** : `ssh`/`scp`
+repassent par `-i data/keys/pi-swarm_ed25519` (avec `-o UserKnownHostsFile=data/keys/known_hosts
+-o StrictHostKeyChecking=accept-new` pour garder l'état des clés d'hôte centralisé) et le
 device bascule en `setup`.
+
+#### Enrôlement manuel (vérification de bout en bout)
+
+À défaut de suite de tests, valider l'enrôlement à la main contre un vrai Pi du LAN :
+
+```bash
+make run                                   # démarre l'API + la SPA
+# 1. Enregistrer le Pi (adapter host / sshUser)
+curl -s -XPOST localhost:10028/api/devices \
+  -H 'content-type: application/json' \
+  -d '{"name":"rpi-test","host":"caentech.local","sshUser":"pi"}'
+# 2. Enrôler (mot de passe du compte SSH du Pi) -> ok:true + empreinte SHA256 dans output
+curl -s -XPOST localhost:10028/api/devices/<id>/configure \
+  -H 'content-type: application/json' \
+  -d '{"password":"<mot-de-passe>"}'
+# 3. Vérifier l'empreinte mémorisée par l'app (TOFU)
+cat data/keys/known_hosts
+# 4. Vérifier (via la clé désormais) le drop-in sudoers + /opt/pi-manager (donné au compte)
+ssh -i data/keys/pi-swarm_ed25519 -o UserKnownHostsFile=data/keys/known_hosts pi@caentech.local \
+  'cat /etc/sudoers.d/pi-manager && ls -ld /opt/pi-manager'
+# 5. Idempotence : relancer l'étape 2 -> toujours ok:true, ni clé ni drop-in dupliqués
+# 6. Setup : déploie le zip (setup.sh + update.sh) DANS /opt/pi-manager et lance setup.sh
+curl -s -XPOST localhost:10028/api/devices/<id>/setup
+ssh -i data/keys/pi-swarm_ed25519 -o UserKnownHostsFile=data/keys/known_hosts pi@caentech.local \
+  'ls -l /opt/pi-manager/setup.sh /opt/pi-manager/update.sh && sudo -n /opt/pi-manager/update.sh'
+```
 
 ### Setup (réparation via clé)
 
@@ -139,6 +181,7 @@ Toutes surchargeables ; les défauts conviennent à un usage local.
 | `PI_MANAGER_FILES_DIR`              | `data/files`                  | Stockage local des fichiers (dropbox)           |
 | `PI_MANAGER_KEYS_DIR`               | `data/keys`                   | Dossier local de la paire de clés globale       |
 | `PI_MANAGER_IDENTITY_FILE`          | `data/keys/pi-swarm_ed25519`  | Clé privée globale (`.pub` à côté)              |
+| `PI_MANAGER_KNOWN_HOSTS_FILE`       | `data/keys/known_hosts`       | `known_hosts` géré par l'app (TOFU des clés d'hôte des Pi) |
 | `PI_MANAGER_STATE_PATH`             | `~/.pi-manager/pi-swarm.json` | Chemin **distant** du fichier unique (enrôlement + état) |
 | `PI_MANAGER_REMOTE_FILES_DIR`       | `~/.pi-manager/files`         | Dossier **distant** de déploiement des fichiers |
 | `PI_MANAGER_POLL_INTERVAL_SECONDS`  | `30`                          | Intervalle du poller                            |

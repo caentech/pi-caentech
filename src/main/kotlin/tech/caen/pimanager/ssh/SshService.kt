@@ -31,10 +31,22 @@ data class ExecResult(
  * via `-i` dès qu'elle existe. Tant qu'elle n'est pas posée, aucune identité n'est
  * proposée et `BatchMode=yes` provoque l'échec net `Permission denied` qui signale
  * un Pi en ligne mais sans notre clé (état `new`).
+ *
+ * Les clés d'hôte sont centralisées dans le `known_hosts` de l'app (le même que celui
+ * alimenté en TOFU à l'enrôlement, cf. [TofuHostKeyVerifier]) via
+ * `-o UserKnownHostsFile=<...> -o StrictHostKeyChecking=accept-new`, jamais le
+ * `~/.ssh/known_hosts` de l'utilisateur.
  */
-class SshService(private val timeoutSeconds: Long, private val identityFile: String? = null) {
+class SshService(
+    private val timeoutSeconds: Long,
+    private val identityFile: String? = null,
+    private val knownHostsFile: String,
+) {
 
     private val log = LoggerFactory.getLogger(SshService::class.java)
+
+    /** Chemin absolu du `known_hosts` de l'app, partagé par toutes les commandes. */
+    private val knownHostsPath: String = File(knownHostsFile).absolutePath
 
     fun target(host: String, user: String?): String =
         if (user.isNullOrBlank()) host else "$user@$host"
@@ -45,6 +57,12 @@ class SshService(private val timeoutSeconds: Long, private val identityFile: Str
         "-o", "IdentitiesOnly=yes",
     )
 
+    /** Clés d'hôte centralisées dans le `known_hosts` de l'app, sémantique accept-new. */
+    private fun knownHostsArgs(): List<String> = listOf(
+        "-o", "UserKnownHostsFile=$knownHostsPath",
+        "-o", "StrictHostKeyChecking=accept-new",
+    )
+
     /** `-i <clé>` uniquement si la clé globale de l'app a déjà été générée. */
     private fun identityArgs(): List<String> =
         identityFile?.takeIf { File(it).exists() }?.let { listOf("-i", it) } ?: emptyList()
@@ -52,27 +70,27 @@ class SshService(private val timeoutSeconds: Long, private val identityFile: Str
     private fun sshArgs(): List<String> = listOf(
         "ssh",
         "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ConnectTimeout=$timeoutSeconds",
-    ) + isolationArgs() + identityArgs()
+    ) + knownHostsArgs() + isolationArgs() + identityArgs()
 
     private fun scpArgs(): List<String> = listOf(
         "scp",
         "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ConnectTimeout=$timeoutSeconds",
         "-p",
-    ) + isolationArgs() + identityArgs()
+    ) + knownHostsArgs() + isolationArgs() + identityArgs()
 
     /**
      * Commande `ssh` lisible (affichée dans l'UI / copiée dans le presse-papier).
-     * Pointe vers la clé de l'app via `-i <chemin absolu>` dès qu'elle existe, pour
-     * que l'utilisateur se connecte avec la même identité que pi-manager.
+     * Pointe vers la clé de l'app via `-i <chemin absolu>` dès qu'elle existe et vers
+     * le `known_hosts` de l'app, pour que l'utilisateur se connecte avec la même
+     * identité ET le même état de clés d'hôte que pi-manager.
      */
     fun command(host: String, user: String?): String {
         val key = identityFile?.let { File(it) }?.takeIf { it.exists() }?.absolutePath
         val identity = if (key != null) "-i $key " else ""
-        return "ssh $identity${target(host, user)}"
+        val hostKeys = "-o UserKnownHostsFile=$knownHostsPath -o StrictHostKeyChecking=accept-new "
+        return "ssh $identity$hostKeys${target(host, user)}"
     }
 
     /** Teste la connexion SSH (commande triviale). */

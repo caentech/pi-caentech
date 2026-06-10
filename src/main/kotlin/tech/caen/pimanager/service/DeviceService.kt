@@ -187,9 +187,9 @@ class DeviceService(
 
     /**
      * Phase de setup d'un Pi enrôlé (état `setup`) : zippe le répertoire applicatif
-     * local, l'envoie sur le Pi, le décompresse puis lance `main.sh`. En cas de succès,
-     * bascule l'état du fichier pi-swarm.json sur le Pi en `ready` (le marqueur
-     * `managedBy` est préservé) et re-checke pour refléter `ready` immédiatement.
+     * local, l'envoie sur le Pi, le décompresse dans `~/.pi-manager` puis lance `setup.sh`.
+     * En cas de succès, bascule l'état du fichier pi-swarm.json sur le Pi en `ready` (le
+     * marqueur `managedBy` est préservé) et re-checke pour refléter `ready` immédiatement.
      */
     suspend fun setup(record: DeviceRecord): ActionResult {
         val source = File(appDir)
@@ -204,11 +204,11 @@ class DeviceService(
         val zip = File.createTempFile("pi-app", ".zip")
         try {
             zipDirectoryContents(source, zip)
-            val remoteZip = "$remoteAppDir.zip"
+            // Zip déposé en /tmp (le compte ne peut pas écrire dans /opt) ; décompressé ensuite
+            // dans $remoteAppDir (/opt/pi-manager), créé et donné au compte à l'enrôlement.
+            val remoteZip = "/tmp/pi-manager-app.zip"
 
-            // 1. Copie du zip (le dossier parent est créé au besoin).
-            val parent = remoteAppDir.substringBeforeLast('/', "")
-            if (parent.isNotBlank()) ssh.exec(record.host, record.sshUser, "mkdir -p $parent")
+            // 1. Copie du zip dans le staging /tmp.
             val sent = ssh.scpTo(record.host, record.sshUser, zip.absolutePath, remoteZip)
             if (!sent.success) {
                 return ActionResult(
@@ -220,10 +220,11 @@ class DeviceService(
                 )
             }
 
-            // 2. Décompression (dossier remis à zéro) puis lancement de main.sh.
-            val deployCmd = "rm -rf $remoteAppDir && mkdir -p $remoteAppDir && " +
+            // 2. Décompression dans /opt/pi-manager (`unzip -o` écrase setup.sh / update.sh aux
+            //    chemins autorisés par le sudoers NOPASSWD) puis lancement de setup.sh.
+            val deployCmd = "mkdir -p $remoteAppDir && " +
                 "unzip -o $remoteZip -d $remoteAppDir && rm -f $remoteZip && " +
-                "chmod +x $remoteAppDir/main.sh && bash $remoteAppDir/main.sh"
+                "chmod +x $remoteAppDir/setup.sh $remoteAppDir/update.sh && bash $remoteAppDir/setup.sh"
             val run = ssh.exec(record.host, record.sshUser, deployCmd)
             if (!run.success) {
                 return ActionResult(
@@ -232,7 +233,7 @@ class DeviceService(
                     exitCode = run.exitCode,
                     output = run.stdout.trim().ifBlank { null },
                     error = run.stderr.trim().ifBlank { null },
-                    message = "Échec du déploiement / lancement de main.sh",
+                    message = "Échec du déploiement / lancement de setup.sh",
                 )
             }
 
@@ -310,10 +311,13 @@ class DeviceService(
     // --- Configuration (enrôlement d'un Pi vierge) ---
 
     /**
-     * Configure un Pi en ligne mais non enrôlé : pose la clé publique globale
-     * (générée au besoin) via le mot de passe fourni, puis dépose le fichier
-     * pi-manager (état `setup`, marqueur `managedBy`). Le mot de passe n'est jamais
-     * conservé. Après succès, la clé suffit : un re-check fait passer le device en `setup`.
+     * Configure un Pi en ligne mais non enrôlé (passe de bootstrap par mot de passe,
+     * une seule fois) : vérifie la clé d'hôte en TOFU, pose la clé publique globale
+     * (générée au besoin), installe le sudoers NOPASSWD (validé par visudo) puis dépose
+     * le fichier pi-manager (état `setup`, marqueur `managedBy`). Le mot de passe n'est
+     * jamais conservé. Après succès, la clé suffit (pilotage sans mot de passe sudo) :
+     * un re-check fait passer le device en `setup`. L'empreinte SHA256 de la clé d'hôte
+     * est exposée pour vérification par l'opérateur.
      */
     suspend fun configure(record: DeviceRecord, password: String): ActionResult {
         if (password.isBlank()) throw badRequest("Le mot de passe SSH est obligatoire")
@@ -324,18 +328,31 @@ class DeviceService(
         val stateJson = appJson.encodeToString(PiStatus.serializer(), seedStatus(record))
 
         val res = provisioner.configure(record.host, user, password, publicKey, stateJson, remoteStatePath)
-        if (res.success) {
-            // La clé fonctionne désormais : on reflète le nouvel état tout de suite.
-            runCatching { check(record) }
-            eventBus.publish(StreamEvent("device.configured", nowIso(), record.id, message = "Pi configuré (clé + fichier pi-manager)"))
+        val fingerprint = res.hostKeyFingerprint
+        if (fingerprint != null) {
+            log.info("Device {} ({}): empreinte clé d'hôte (SHA256) {}", record.name, record.host, fingerprint)
         }
+        if (res.exec.success) {
+            // La clé + le sudoers fonctionnent désormais : on reflète le nouvel état tout de suite.
+            runCatching { check(record) }
+            eventBus.publish(StreamEvent("device.configured", nowIso(), record.id, message = "Pi enrôlé (clé + sudoers NOPASSWD + fichier pi-manager)"))
+        }
+        val fpNote = fingerprint?.let { "Empreinte clé d'hôte (SHA256) : $it" }
+        val output = listOfNotNull(res.exec.stdout.trim().ifBlank { null }, fpNote)
+            .joinToString("\n").ifBlank { null }
         return ActionResult(
-            ok = res.success,
+            ok = res.exec.success,
             action = "configure",
-            exitCode = res.exitCode,
-            output = res.stdout.trim().ifBlank { null },
-            error = res.stderr.trim().ifBlank { null },
-            message = if (res.success) "Configuration réussie : clé SSH posée et fichier pi-manager déposé" else "Échec de la configuration",
+            exitCode = res.exec.exitCode,
+            output = output,
+            error = res.exec.stderr.trim().ifBlank { null },
+            message = if (res.exec.success) {
+                "Enrôlement réussi : clé SSH posée, sudoers NOPASSWD installé et fichier pi-manager déposé"
+            } else if (res.hostKeyChanged) {
+                "Enrôlement refusé : la clé d'hôte du Pi a changé (protection MITM)"
+            } else {
+                "Échec de l'enrôlement"
+            },
         )
     }
 

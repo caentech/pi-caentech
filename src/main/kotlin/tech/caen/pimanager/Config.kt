@@ -25,6 +25,13 @@ object Config {
     val identityFile: String = env("PI_MANAGER_IDENTITY_FILE", "$keysDir/pi-swarm_ed25519")
 
     /**
+     * Fichier `known_hosts` géré par l'app (TOFU des clés d'hôte des Pi) — jamais le
+     * `~/.ssh/known_hosts` de l'utilisateur. Alimenté à l'enrôlement, réutilisé par
+     * `ssh`/`scp` en régime établi.
+     */
+    val knownHostsFile: String = env("PI_MANAGER_KNOWN_HOSTS_FILE", "$keysDir/known_hosts")
+
+    /**
      * Chemin DISTANT du fichier UNIQUE pi-manager sur le Pi (enrôlement + état).
      * Déposé à la Configuration / au Setup, lu à chaque SSH-pull.
      */
@@ -35,12 +42,17 @@ object Config {
 
     /**
      * Dossier LOCAL de l'application à déployer sur le Pi pendant la phase de setup.
-     * Son contenu est zippé, copié puis décompressé côté Pi, et `main.sh` est lancé.
+     * Son contenu est zippé, copié puis décompressé côté Pi, et `setup.sh` est lancé.
      */
     val appDir: String = env("PI_MANAGER_APP_DIR", "pi-app")
 
-    /** Dossier DISTANT où l'application est décompressée et lancée (`<dir>/main.sh`). */
-    val remoteAppDir: String = env("PI_MANAGER_REMOTE_APP_DIR", "~/.pi-manager/app")
+    /**
+     * Dossier DISTANT où l'application est décompressée et lancée (`<dir>/setup.sh`).
+     * `/opt/pi-manager` : les scripts atterrissent en `/opt/pi-manager/setup.sh` et
+     * `/opt/pi-manager/update.sh`, exactement les chemins autorisés par le sudoers NOPASSWD.
+     * Le dossier est créé à l'enrôlement et donné au compte de déploiement (écriture par clé).
+     */
+    val remoteAppDir: String = env("PI_MANAGER_REMOTE_APP_DIR", "/opt/pi-manager")
 
     /** Intervalle du poller interne (secondes). */
     val pollIntervalSeconds: Long = env("PI_MANAGER_POLL_INTERVAL_SECONDS", "30").toLong()
