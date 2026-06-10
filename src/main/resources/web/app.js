@@ -565,18 +565,6 @@ async function refreshFleet() {
   await loadFleet();
 }
 
-async function runSetup(id) {
-  toast('Setup lancé', 'Installation du fichier de statut…', 'info');
-  try {
-    const r = await api(`/devices/${id}/setup`, { method: 'POST' });
-    toast(r.ok ? 'Setup terminé' : 'Setup échoué', r.message || '', r.ok ? 'ok' : 'err');
-  } catch (e) {
-    toast('Setup échoué', e.message, 'err');
-  }
-  await loadFleet();
-  if (view.name === 'detail' && view.deviceId === id) openDetail(id);
-}
-
 function pickAndUpload(deviceId, push) {
   const input = $('#hidden-file');
   input.value = '';
