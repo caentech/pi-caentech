@@ -86,11 +86,18 @@ class SshService(
      * le `known_hosts` de l'app, pour que l'utilisateur se connecte avec la même
      * identité ET le même état de clés d'hôte que pi-manager.
      */
-    fun command(host: String, user: String?): String {
+    fun command(host: String, user: String?, cd: String? = null): String {
         val key = identityFile?.let { File(it) }?.takeIf { it.exists() }?.absolutePath
         val identity = if (key != null) "-i $key " else ""
         val hostKeys = "-o UserKnownHostsFile=$knownHostsPath -o StrictHostKeyChecking=accept-new "
-        return "ssh $identity$hostKeys${target(host, user)}"
+        val tgt = target(host, user)
+        return if (cd.isNullOrBlank()) {
+            "ssh $identity$hostKeys$tgt"
+        } else {
+            // `-t` force un pseudo-terminal ; on se place dans le dossier puis on remplace le
+            // process par un shell de login interactif. Le `~` éventuel est expansé côté Pi.
+            "ssh $identity$hostKeys-t $tgt 'cd $cd && exec ${'$'}SHELL -l'"
+        }
     }
 
     /** Teste la connexion SSH (commande triviale). */
@@ -101,9 +108,27 @@ class SshService(
     suspend fun readFile(host: String, user: String?, remotePath: String): ExecResult =
         run(sshArgs() + target(host, user) + "cat $remotePath", timeoutSeconds + 2)
 
-    /** Exécute une commande arbitraire sur le Pi. */
-    suspend fun exec(host: String, user: String?, remoteCommand: String): ExecResult =
-        run(sshArgs() + target(host, user) + remoteCommand, timeoutSeconds + 2)
+    /**
+     * Exécute une commande arbitraire sur le Pi. `timeout` permet d'allonger le délai
+     * pour les commandes longues (ex. le déploiement de setup, qui peut installer LÖVE
+     * via apt) ; par défaut on garde le timeout SSH standard.
+     */
+    suspend fun exec(
+        host: String,
+        user: String?,
+        remoteCommand: String,
+        timeout: Long = timeoutSeconds + 2,
+    ): ExecResult =
+        run(sshArgs() + target(host, user) + remoteCommand, timeout)
+
+    /**
+     * Relève les ressources du Pi (mémoire + CPU) en une seule session SSH. Lit `/proc`
+     * et prend deux instantanés de `/proc/stat` espacés d'~1 s pour dériver le %CPU.
+     * Sortie balisée (`#MEM` / `#LOAD` / `#CPU`), parsée par [MetricsParser]. Le timeout
+     * est augmenté du `sleep 1` interne.
+     */
+    suspend fun readMetrics(host: String, user: String?): ExecResult =
+        run(sshArgs() + target(host, user) + METRICS_COMMAND, timeoutSeconds + 4)
 
     /** Copie un fichier local vers le Pi (scp). */
     suspend fun scpTo(host: String, user: String?, localPath: String, remotePath: String): ExecResult {
@@ -112,8 +137,8 @@ class SshService(
     }
 
     /** Ouvre un terminal SSH dans Terminal.app (macOS) via osascript. Fire-and-forget. */
-    fun openTerminal(host: String, user: String?): Boolean {
-        val sshCmd = command(host, user)
+    fun openTerminal(host: String, user: String?, cd: String? = null): Boolean {
+        val sshCmd = command(host, user, cd)
         val script = """
             tell application "Terminal"
                 do script "$sshCmd"
@@ -130,6 +155,18 @@ class SshService(
             log.warn("Impossible d'ouvrir le terminal: {}", e.message)
             false
         }
+    }
+
+    companion object {
+        /**
+         * Relevé de ressources en une commande : mémoire (`/proc/meminfo`), charge
+         * (`/proc/loadavg`) et deux instantanés CPU (`/proc/stat`) à ~1 s d'intervalle
+         * pour calculer le %CPU. Sections balisées pour un parsing robuste.
+         */
+        private const val METRICS_COMMAND =
+            "echo '#MEM'; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; " +
+                "echo '#LOAD'; cat /proc/loadavg; " +
+                "echo '#CPU'; head -n1 /proc/stat; sleep 1; head -n1 /proc/stat"
     }
 
     private suspend fun run(command: List<String>, timeout: Long): ExecResult = withContext(Dispatchers.IO) {

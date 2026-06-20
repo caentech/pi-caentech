@@ -203,6 +203,10 @@ input { font-family: inherit; }
 
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 
+/* icône en rotation pour les boutons en cours de traitement (setup / réinstallation) */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { display: inline-flex; animation: spin 0.9s linear infinite; }
+
 /* ============================================================
    DEVICE GRID + CARD
    ============================================================ */
@@ -361,6 +365,18 @@ input { font-family: inherit; }
 .fileitem__main { flex: 1; min-width: 0; }
 .fileitem__name { font-size: 13px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fileitem__meta { font-size: 11.5px; color: var(--text-lo); margin-top: 1px; }
+/* aide-mémoire : emplacements sur le Pi — un clic ouvre un SSH dans le dossier */
+.loclist { display: flex; flex-direction: column; gap: 6px; }
+.loc { display: flex; align-items: flex-start; gap: 11px; width: 100%; text-align: left; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-2); color: inherit; cursor: pointer; transition: border-color .12s, background .12s; }
+.loc:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: var(--bg-3); }
+.loc:disabled { opacity: .5; cursor: not-allowed; }
+.loc:disabled:hover { border-color: var(--border-soft); background: var(--bg-2); }
+.loc__icon { width: 28px; height: 28px; border-radius: var(--r-sm); background: var(--bg-3); display: grid; place-items: center; color: var(--accent-text); flex: none; margin-top: 1px; }
+.loc:hover .loc__icon { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.loc__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.loc__label { font-size: 12.5px; font-weight: 600; color: var(--text-hi); }
+.loc__path { font-size: 11.5px; color: var(--accent-text); word-break: break-all; }
+.loc__hint { font-size: 11px; color: var(--text-lo); line-height: 1.4; }
 .fstat { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill); white-space: nowrap; }
 .fstat--done { color: var(--st-ready-ink); background: color-mix(in srgb, var(--st-ready) 14%, transparent); }
 .fstat--proc { color: var(--st-setup-ink); background: color-mix(in srgb, var(--st-setup) 16%, transparent); }
@@ -475,4 +491,24 @@ input { font-family: inherit; }
   .btn, .toggle { min-height: 40px; }
   .btn { height: 40px; }
   .chip { padding: 8px 12px; }
+}
+
+/* ============================================================
+   MÉTRIQUES — sparklines mémoire & CPU (tendance)
+   ============================================================ */
+.metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.metric { border: 1px solid var(--border-soft); border-radius: var(--r-md); padding: 12px 13px 10px; background: var(--bg-2); }
+.metric__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.metric__label { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-mid); font-weight: 600; }
+.metric__dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.metric__cur { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--text-hi); font-variant-numeric: tabular-nums; }
+.metric__chart { margin: 8px 0 6px; }
+.spark { display: block; width: 100%; height: 60px; }
+.spark__th { stroke: var(--danger); stroke-width: 1; stroke-dasharray: 3 3; opacity: .5; vector-effect: non-scaling-stroke; }
+.metric__empty { height: 60px; border-radius: var(--r-sm); background: repeating-linear-gradient(90deg, var(--border-soft) 0 2px, transparent 2px 7px); opacity: .5; }
+.metric__foot { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--text-lo); font-family: var(--mono); }
+.metrics-meta { margin-top: 12px; font-size: 11px; color: var(--text-lo); text-align: center; }
+
+@media (max-width: 880px) {
+  .metrics-grid { grid-template-columns: 1fr; }
 }

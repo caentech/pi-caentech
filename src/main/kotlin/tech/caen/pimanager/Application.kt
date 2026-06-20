@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import tech.caen.pimanager.db.Db
 import tech.caen.pimanager.db.DeviceRepository
+import tech.caen.pimanager.db.MetricsRepository
 import tech.caen.pimanager.model.ApiError
 import tech.caen.pimanager.service.DeviceService
 import tech.caen.pimanager.service.EventBus
@@ -44,6 +45,7 @@ fun main() {
 fun Application.module() {
     val startedAt = nowMillis()
     val repo = DeviceRepository()
+    val metricsRepo = MetricsRepository()
     val ssh = SshService(Config.sshTimeoutSeconds, Config.identityFile, Config.knownHostsFile)
     val provisioner = SshProvisioner(Config.identityFile, Config.knownHostsFile, Config.sshTimeoutSeconds)
     val fileStore = FileStore(Config.localFilesDir)
@@ -51,6 +53,7 @@ fun Application.module() {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val service = DeviceService(
         repo = repo,
+        metricsRepo = metricsRepo,
         ssh = ssh,
         provisioner = provisioner,
         files = fileStore,
@@ -60,6 +63,8 @@ fun Application.module() {
         remoteFilesDir = Config.remoteFilesDir,
         appDir = Config.appDir,
         remoteAppDir = Config.remoteAppDir,
+        setupTimeoutSeconds = Config.sshSetupTimeoutSeconds,
+        metricsRetentionHours = Config.metricsRetentionHours,
     )
 
     install(ContentNegotiation) { json(appJson) }

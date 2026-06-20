@@ -9,3 +9,11 @@ build
 # Données runtime du backend (registre SQLite + fichiers uploadés)
 data
 .DS_Store
+
+# IDE
+.idea/
+
+# Artefacts d'outillage (MCP, Playwright) et captures de debug
+.playwright-mcp/
+.mcp_data/
+/after-reinstall.png

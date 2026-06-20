@@ -61,6 +61,19 @@ object Config {
     val sshTimeoutSeconds: Long = env("PI_MANAGER_SSH_TIMEOUT_SECONDS", "10").toLong()
 
     /**
+     * Rétention de la série temporelle des ressources (mémoire + CPU), en heures.
+     * Au-delà, les vieux échantillons sont purgés. À ~30 s d'intervalle, 24 h ≈ 2880
+     * échantillons/device — largement suffisant pour visualiser une tendance.
+     */
+    val metricsRetentionHours: Long = env("PI_MANAGER_METRICS_RETENTION_HOURS", "24").toLong()
+
+    /**
+     * Timeout (secondes) du déploiement de setup : la commande lance `setup.sh`, qui peut
+     * installer LÖVE via apt au premier passage — bien plus long que le timeout SSH standard.
+     */
+    val sshSetupTimeoutSeconds: Long = env("PI_MANAGER_SSH_SETUP_TIMEOUT_SECONDS", "300").toLong()
+
+    /**
      * Commande de lecture des logs sur le Pi. `{lines}` est remplacé par le
      * nombre de lignes demandé. Surchargeable par device via le query param.
      */

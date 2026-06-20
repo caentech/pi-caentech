@@ -146,6 +146,7 @@ function adapt(d) {
     } : null,
     appVersion: st.appVersion || d.appVersion || null,
     sshCommand: d.sshCommand || `ssh ${d.sshUser || 'pi'}@${d.host}`,
+    remoteLocations: d.remoteLocations || [],
     lastError: d.lastError || null,
     files: (d.files || []).map(f => ({ id: f.id, name: f.name, size: fmtSize(f.size), date: relTime(f.modifiedAt) })),
   };
@@ -170,7 +171,10 @@ function fmtDur(s) {
 const root = $('#app');
 let DEVICES = [];                                  // adapted overviews
 let DETAIL = null;                                 // adapted detail (current device)
+let METRICS = [];                                  // série temporelle (device courant) : [{at, memUsedPercent, …}]
+const METRICS_WINDOW_MIN = 180;                    // fenêtre par défaut du graphe (3 h)
 const pushState = new Map();                       // "deviceId:fileId" -> 'proc'|'done'|'err'
+const setupInProgress = new Set();                 // ids des devices dont le setup/réinstallation est en cours
 let view = { name: 'fleet', deviceId: null, filter: 'all', typeFilter: 'all', q: '', status: 'data' };
 
 /* ============================================================
@@ -262,7 +266,7 @@ async function deleteDevice(d, shutdownFirst) {
   try {
     await api(`/devices/${d.id}`, { method: 'DELETE' });
     toast('Device supprimé', `${d.name} retiré du parc`, 'ok');
-    go({ name: 'fleet', deviceId: null });
+    goFleet();
     await loadFleet();
   } catch (e) {
     toast('Suppression échouée', e.message, 'err');
@@ -374,10 +378,11 @@ function openConfigure(d) {
 }
 
 /* ssh — ouvre un terminal sur le Mac via le backend */
-async function launchSSH(d) {
+async function launchSSH(d, cd) {
   try {
-    await api(`/devices/${d.id}/ssh/open`, { method: 'POST' });
-    toast('Connexion SSH lancée', `${d.sshCommand} · terminal ouvert`, 'info');
+    const qs = cd ? `?cd=${encodeURIComponent(cd)}` : '';
+    await api(`/devices/${d.id}/ssh/open${qs}`, { method: 'POST' });
+    toast('Connexion SSH lancée', cd ? `${d.sshCommand} → ${cd}` : `${d.sshCommand} · terminal ouvert`, 'info');
   } catch (e) {
     toast('Échec ouverture terminal', e.message, 'err');
   }
@@ -391,6 +396,28 @@ function go(next) {
   render();
   window.scrollTo({ top: 0 });
 }
+
+/* ============================================================
+   ROUTING — l'URL (hash) est la source de vérité de la navigation,
+   pour qu'un détail device soit partageable / rechargeable.
+   #/                → vue flotte
+   #/device/<id>     → détail d'un device
+   ============================================================ */
+function goFleet() { navigate('#/'); }
+function goDetail(id) { navigate('#/device/' + encodeURIComponent(id)); }
+
+function navigate(hash) {
+  if (location.hash === hash) router();   // même URL : on (re)rend explicitement
+  else location.hash = hash;              // sinon hashchange déclenche router()
+}
+
+function router() {
+  const m = (location.hash || '').match(/^#\/device\/(.+)$/);
+  if (m) openDetail(decodeURIComponent(m[1]));
+  else go({ name: 'fleet', deviceId: null });
+}
+
+window.addEventListener('hashchange', router);
 
 function render() {
   if (view.name === 'detail') return renderDetail();
@@ -602,7 +629,7 @@ function bindFleet() {
   $('#clear-filters') && ($('#clear-filters').onclick = () => { view.filter = 'all'; view.typeFilter = 'all'; view.q = ''; renderFleet(); });
   $('#add-empty') && ($('#add-empty').onclick = openAddDevice);
   $('#add-device') && ($('#add-device').onclick = openAddDevice);
-  $$('[data-open]').forEach(b => b.onclick = () => openDetail(b.dataset.open));
+  $$('[data-open]').forEach(b => b.onclick = () => goDetail(b.dataset.open));
   $$('[data-ssh]').forEach(b => b.onclick = (e) => { e.stopPropagation(); launchSSH(DEVICES.find(d => d.id === b.dataset.ssh)); });
   $$('[data-setup]').forEach(b => b.onclick = () => { const d = DEVICES.find(x => x.id === b.dataset.setup); if (d) openConfigure(d); });
   $$('[data-deploy]').forEach(b => b.onclick = () => { const d = DEVICES.find(x => x.id === b.dataset.deploy); if (d) runSetup(d, b); });
@@ -685,21 +712,110 @@ async function deleteFile(deviceId, fileId, name) {
 }
 
 /* ============================================================
+   MÉTRIQUES — sparklines mémoire + CPU (tendance, SVG, sans dépendance)
+   ============================================================ */
+const METRIC_DEFS = {
+  mem: { label: 'Mémoire', color: 'var(--st-connect)', accessor: m => m.memUsedPercent, threshold: 90 },
+  cpu: { label: 'CPU', color: 'var(--st-new)', accessor: m => m.cpuPercent, threshold: null },
+};
+
+/* SVG sparkline 0–100 % à partir d'une liste de valeurs. Aire + ligne + point courant,
+   et une ligne de seuil pointillée optionnelle (ex. 90 % pour la mémoire). */
+function sparkSvg(values, color, threshold) {
+  const W = 300, H = 60, padT = 6, padB = 4;
+  const span = H - padT - padB;
+  const y = v => padT + (1 - Math.max(0, Math.min(100, v)) / 100) * span;
+  const x = i => values.length <= 1 ? W : (i / (values.length - 1)) * W;
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  const line = pts.join(' ');
+  const area = `${x(0).toFixed(1)},${H} ${line} ${x(values.length - 1).toFixed(1)},${H}`;
+  const gid = 'g' + Math.random().toString(36).slice(2, 8);
+  const last = values[values.length - 1];
+  const thLine = threshold != null
+    ? `<line x1="0" y1="${y(threshold).toFixed(1)}" x2="${W}" y2="${y(threshold).toFixed(1)}" class="spark__th"/>` : '';
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="--spark-c:${color}">
+    <defs><linearGradient id="${gid}" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="${color}" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="${color}" stop-opacity="0.02"/>
+    </linearGradient></defs>
+    ${thLine}
+    <polygon points="${area}" fill="url(#${gid})" stroke="none"/>
+    <polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${x(values.length - 1).toFixed(1)}" cy="${y(last).toFixed(1)}" r="2.6" fill="${color}" vector-effect="non-scaling-stroke"/>
+  </svg>`;
+}
+
+function metricRow(key) {
+  const def = METRIC_DEFS[key];
+  const vals = METRICS.map(def.accessor).filter(v => typeof v === 'number' && !isNaN(v));
+  const last = METRICS[METRICS.length - 1];
+  const cur = vals.length ? vals[vals.length - 1] : null;
+  const peak = vals.length ? Math.max(...vals) : null;
+  let sub = '';
+  if (key === 'mem' && last) sub = `${last.memUsedMb} / ${last.memTotalMb} Mo`;
+  else if (key === 'cpu' && last) sub = `charge ${(+last.load1).toFixed(2)}`;
+  return `<div class="metric">
+    <div class="metric__head">
+      <span class="metric__label"><span class="metric__dot" style="background:${def.color}"></span>${def.label}</span>
+      <span class="metric__cur">${cur != null ? cur.toFixed(0) + ' %' : '—'}</span>
+    </div>
+    <div class="metric__chart">${vals.length ? sparkSvg(vals, def.color, def.threshold) : '<div class="metric__empty"></div>'}</div>
+    <div class="metric__foot">
+      <span>${esc(sub)}</span>
+      <span>${peak != null ? 'pic ' + peak.toFixed(0) + ' %' : ''}</span>
+    </div>
+  </div>`;
+}
+
+function metricsBody() {
+  if (!METRICS.length) {
+    return `<div class="setting__hint">Aucun relevé pour l'instant — la collecte se fait à chaque cycle de vérification (~30 s). Le graphe apparaîtra dès le premier point.</div>`;
+  }
+  const last = METRICS[METRICS.length - 1];
+  return `<div class="metrics-grid">${metricRow('mem')}${metricRow('cpu')}</div>
+    <div class="metrics-meta">Fenêtre ${Math.round(METRICS_WINDOW_MIN / 60)} h · ${METRICS.length} relevé${METRICS.length > 1 ? 's' : ''} · dernier ${esc(relTime(last.at))}</div>`;
+}
+
+function metricsPanel() {
+  return `<div class="panel">
+    <div class="panel__title">Ressources <span class="count">· tendance mémoire & CPU</span></div>
+    <div id="metrics-body">${metricsBody()}</div>
+  </div>`;
+}
+
+/* redessine juste le corps du graphe (sans re-rendre tout le détail) */
+function drawMetrics() {
+  const body = $('#metrics-body');
+  if (body) body.innerHTML = metricsBody();
+}
+
+async function loadMetrics(id) {
+  try {
+    const r = await api(`/devices/${id}/metrics?window=${METRICS_WINDOW_MIN}`);
+    if (view.deviceId !== id) return;
+    METRICS = r.samples || [];
+    drawMetrics();
+  } catch (e) { /* graphe optionnel : on ignore les erreurs */ }
+}
+
+/* ============================================================
    DEVICE DETAIL
    ============================================================ */
 async function openDetail(id) {
   view.name = 'detail';
   view.deviceId = id;
+  METRICS = [];
   root.innerHTML = `<div class="app"><button class="backlink" id="back-loading">${ICN.back} Vue flotte</button><div class="statebox"><div class="sk sk--line" style="width:200px;height:18px;margin:40px auto"></div></div></div>`;
-  $('#back-loading').onclick = () => go({ name: 'fleet' });
+  $('#back-loading').onclick = () => goFleet();
   try {
     const detail = await api(`/devices/${id}`);
     DETAIL = adapt(detail);
     renderDetail();
     loadLogs(id);
+    loadMetrics(id);
   } catch (e) {
     toast('Device introuvable', e.message, 'err');
-    go({ name: 'fleet' });
+    goFleet();
   }
 }
 
@@ -715,6 +831,21 @@ function renderDetail() {
     <div class="idgrid__cell"><div class="idgrid__k">Uptime</div><div class="idgrid__v">${esc(d.uptime)}</div></div>
     <div class="idgrid__cell" style="grid-column:1/-1"><div class="idgrid__k">Dernière vérification</div><div class="idgrid__v">${esc(d.lastseen)}</div></div>
   </div>`;
+
+  const locsRows = (d.remoteLocations || []).map(l => `
+    <button class="loc" data-cd="${esc(l.dir)}" ${d.state === 'off' ? 'disabled' : ''} title="Ouvrir une session SSH dans ${esc(l.dir)}">
+      <span class="loc__icon">${ICN.terminal}</span>
+      <span class="loc__body">
+        <span class="loc__label">${esc(l.label)}</span>
+        <span class="loc__path mono">${esc(l.path)}</span>
+        <span class="loc__hint">${esc(l.hint)}</span>
+      </span>
+    </button>`).join('');
+  const locsBlock = locsRows ? `<div class="panel">
+    <div class="panel__title">Emplacements sur le Pi <span class="count">· aide-mémoire</span></div>
+    <div class="setting__hint" style="margin:-4px 0 12px">Un clic ouvre une session SSH directement dans le dossier.</div>
+    <div class="loclist">${locsRows}</div>
+  </div>` : '';
 
   const sshBlock = `<div class="ssh-block">
     <div class="panel__title" style="margin-bottom:12px">${ICN.terminal} Connexion rapide</div>
@@ -770,7 +901,9 @@ function renderDetail() {
     settings = `<div class="panel">
       <div class="panel__title">Setup applicatif</div>
       <div class="setting__hint" style="margin-bottom:14px">Le Pi est enrôlé. Le setup envoie l'application (zip du répertoire <span class="mono">pi-app</span>), la décompresse sur le Pi et lance <span class="mono">main.sh</span>. À la fin, l'état bascule en <b>ready</b>.</div>
-      <button class="btn btn--primary" id="run-deploy">Lancer le setup</button>
+      ${setupInProgress.has(d.id)
+        ? `<button class="btn btn--primary" id="run-deploy" disabled><span class="spin">${ICN.refresh}</span> Setup en cours…</button>`
+        : `<button class="btn btn--primary" id="run-deploy">Lancer le setup</button>`}
     </div>`;
   } else if (d.state === 'new') {
     settings = `<div class="panel">
@@ -805,6 +938,11 @@ function renderDetail() {
       <button class="btn btn--danger" id="poweroff" ${d.state === 'off' ? 'disabled' : ''}>${ICN.power} Éteindre</button>`}
     </div>
     <div class="actions-sep"></div>
+    ${d.state === 'ready'
+      ? (setupInProgress.has(d.id)
+          ? `<button class="btn btn--block" id="reinstall" disabled><span class="spin">${ICN.refresh}</span> Réinstallation en cours…</button>`
+          : `<button class="btn btn--block" id="reinstall">${ICN.refresh} Réinstallation</button>`)
+      : ''}
     <button class="btn btn--danger btn--block" id="delete-device">${ICN.trash} Supprimer du parc</button>
   </div>`;
 
@@ -847,12 +985,14 @@ function renderDetail() {
     <div class="detail">
       <div class="detail__main">
         ${settings}
+        ${d.state !== 'off' && d.state !== 'new' ? metricsPanel() : ''}
         ${dropbox}
         ${logs}
       </div>
       <div class="detail__side">
         ${sshBlock}
         <div class="panel"><div class="panel__title">Identité technique</div>${idGrid}</div>
+        ${locsBlock}
         ${actions}
       </div>
     </div>
@@ -861,9 +1001,10 @@ function renderDetail() {
 }
 
 function bindDetail(d) {
-  $('#back').onclick = () => go({ name: 'fleet' });
+  $('#back').onclick = () => goFleet();
 
   $('#ssh-launch') && ($('#ssh-launch').onclick = () => launchSSH(d));
+  $$('[data-cd]').forEach(b => b.onclick = () => launchSSH(d, b.dataset.cd));
   $('#ssh-copy') && ($('#ssh-copy').onclick = async () => {
     try { await navigator.clipboard.writeText(d.sshCommand); toast('Commande copiée', d.sshCommand, 'ok'); }
     catch (e) { toast('Copie indisponible', d.sshCommand, 'info'); }
@@ -893,6 +1034,13 @@ function bindDetail(d) {
     onConfirm: () => deviceAction(d.id, 'shutdown', 'Extinction demandée'),
   }));
 
+  $('#reinstall') && ($('#reinstall').onclick = () => confirmAction({
+    title: 'Réinstaller le device ?',
+    text: `Le setup sera relancé sur <code>${esc(d.name)}</code> : redéploiement de l'application puis exécution de <span class="mono">setup.sh</span>. L'affichage peut être interrompu le temps de l'opération.`,
+    confirmLabel: 'Réinstaller',
+    onConfirm: () => runSetup(d),
+  }));
+
   $('#delete-device') && ($('#delete-device').onclick = () => confirmDeleteDevice(d));
 
   /* dropzone */
@@ -916,14 +1064,21 @@ function bindDetail(d) {
 /* setup — déploie l'application sur le Pi (zip → scp → unzip → main.sh) puis bascule en ready */
 async function runSetup(d, btn) {
   if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = 'Setup en cours…'; }
+  // Marqueur partagé : garde les boutons en mode chargement même si un événement SSE
+  // re-rend le détail pendant le setup (sinon le bouton « réinstallation » se réinitialiserait).
+  setupInProgress.add(d.id);
+  if (view.name === 'detail' && view.deviceId === d.id) renderDetail();
   try {
     const r = await api(`/devices/${d.id}/setup`, { method: 'POST' });
     toast(r.ok ? 'Setup terminé' : 'Setup échoué', r.message || r.error || '', r.ok ? 'ok' : 'err');
+    setupInProgress.delete(d.id);
     await loadFleet();
     if (view.name === 'detail' && view.deviceId === d.id) openDetail(d.id);
   } catch (e) {
+    setupInProgress.delete(d.id);
     if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || 'Lancer le setup'; }
     toast('Setup échoué', e.message, 'err');
+    if (view.name === 'detail' && view.deviceId === d.id) renderDetail();
   }
 }
 
@@ -997,6 +1152,16 @@ function connectStream() {
   es.onmessage = (e) => {
     let ev; try { ev = JSON.parse(e.data); } catch (_) { return; }
     if (!ev || !ev.type) return;
+    // Métriques : on alimente le graphe en direct, sans rafraîchir toute la flotte.
+    if (ev.type === 'device.metrics') {
+      if (ev.metric && view.name === 'detail' && ev.deviceId === view.deviceId) {
+        METRICS.push(ev.metric);
+        const cutoff = Date.now() - METRICS_WINDOW_MIN * 60000;
+        METRICS = METRICS.filter(m => new Date(m.at).getTime() >= cutoff);
+        drawMetrics();
+      }
+      return;
+    }
     if (ev.type === 'device.state.changed' && ev.device) {
       const name = ev.device.name;
       const label = (STATE_META[STATE_KEY[ev.state]] || {}).label || ev.state;
@@ -1024,3 +1189,4 @@ async function refreshDetailQuiet(id) {
    ============================================================ */
 loadFleet();
 connectStream();
+router();   // ouvre directement le détail si l'URL pointe vers #/device/<id>

@@ -1,7 +1,6 @@
 package tech.caen.pimanager.db
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -28,9 +27,10 @@ data class DeviceRecord(
 )
 
 class DeviceRepository {
-    // SQLite n'a qu'un writer : on sérialise les écritures pour éviter SQLITE_BUSY
-    // quand le poller met à jour plusieurs devices en parallèle.
-    private val writeLock = Mutex()
+    // SQLite n'a qu'un writer : on sérialise les écritures via le verrou partagé
+    // (cf. dbWriteLock) pour éviter SQLITE_BUSY quand le poller met à jour plusieurs
+    // devices et insère des métriques en parallèle.
+    private val writeLock = dbWriteLock
 
     private fun toRecord(r: ResultRow) = DeviceRecord(
         id = r[DevicesTable.id],

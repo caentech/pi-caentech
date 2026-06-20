@@ -131,7 +131,9 @@ fun Application.configureRouting(service: DeviceService, eventBus: EventBus, sta
                 }
                 post("/ssh/open") {
                     val device = service.requireDevice(call.id())
-                    val opened = service.openTerminal(device)
+                    // `cd` optionnel : ouvre la session directement dans ce dossier (aide-mémoire).
+                    val cd = call.request.queryParameters["cd"]
+                    val opened = service.openTerminal(device, cd)
                     if (opened) {
                         call.respond(SshCommandResponse(service.sshCommand(device), service.sshTarget(device)))
                     } else {
@@ -182,6 +184,13 @@ fun Application.configureRouting(service: DeviceService, eventBus: EventBus, sta
                     val unit = call.request.queryParameters["unit"]
                     val file = call.request.queryParameters["file"]
                     call.respond(service.logs(device, lines, unit, file))
+                }
+
+                // --- Métriques (mémoire + CPU, tendance) ---
+                get("/metrics") {
+                    // Fenêtre par défaut : 3 h (couvre une dérive mémoire) ; bornée à 7 j.
+                    val window = call.request.queryParameters["window"]?.toIntOrNull()?.coerceIn(5, 10080) ?: 180
+                    call.respond(service.metrics(call.id(), window))
                 }
             }
         }

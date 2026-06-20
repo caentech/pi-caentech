@@ -153,10 +153,27 @@ data class DeviceDetail(
     val status: PiStatus? = null,
     val files: List<DeviceFile> = emptyList(),
     val deferredControls: List<DeferredControl> = emptyList(),
+    val remoteLocations: List<RemoteLocation> = emptyList(),
     val createdAt: String,
     val updatedAt: String,
     val lastCheckedAt: String? = null,
     val lastError: String? = null,
+)
+
+/**
+ * Emplacement notable sur le Pi (aide-mémoire affiché dans le détail device).
+ * Un clic ouvre une session SSH directement dans [dir].
+ */
+@Serializable
+data class RemoteLocation(
+    /** Libellé court (ex. « Application déployée »). */
+    val label: String,
+    /** Chemin mis en avant — peut désigner un fichier précis (ex. le fichier d'état). */
+    val path: String,
+    /** Répertoire où ouvrir la session SSH (parent de [path] quand celui-ci est un fichier). */
+    val dir: String,
+    /** Ce qu'on trouve à cet emplacement. */
+    val hint: String,
 )
 
 @Serializable
@@ -184,6 +201,35 @@ data class Summary(
     val toBeConfigured: Int,
     val new: Int,
     val notConnected: Int,
+)
+
+/**
+ * Échantillon de ressources d'un Pi, relevé à chaque SSH-pull (quand le Pi est joignable).
+ * Volontairement grossier : sert à VISUALISER une TENDANCE (fuite mémoire, charge CPU),
+ * pas à mesurer finement. Mémoire et CPU sont lus depuis `/proc` côté Pi.
+ */
+@Serializable
+data class MetricSample(
+    /** Horodatage du relevé (ISO-8601). */
+    val at: String,
+    /** Mémoire utilisée en % (100 × (MemTotal − MemAvailable) / MemTotal). */
+    val memUsedPercent: Double,
+    /** Mémoire utilisée en Mo. */
+    val memUsedMb: Long,
+    /** Mémoire totale en Mo. */
+    val memTotalMb: Long,
+    /** Charge CPU en % (delta /proc/stat sur ~1 s, tous cœurs confondus). */
+    val cpuPercent: Double,
+    /** Charge moyenne sur 1 min (/proc/loadavg). */
+    val load1: Double,
+)
+
+/** Série temporelle des ressources d'un device sur la fenêtre de rétention. */
+@Serializable
+data class MetricsResponse(
+    val deviceId: String,
+    val windowMinutes: Int,
+    val samples: List<MetricSample> = emptyList(),
 )
 
 @Serializable
@@ -228,6 +274,8 @@ data class StreamEvent(
     val state: DeviceState? = null,
     val message: String? = null,
     val device: DeviceOverview? = null,
+    /** Présent sur les événements `device.metrics` : le dernier échantillon de ressources. */
+    val metric: MetricSample? = null,
 )
 
 @Serializable

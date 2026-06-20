@@ -7,6 +7,7 @@ import tech.caen.pimanager.appJson
 import tech.caen.pimanager.badRequest
 import tech.caen.pimanager.db.DeviceRecord
 import tech.caen.pimanager.db.DeviceRepository
+import tech.caen.pimanager.db.MetricsRepository
 import tech.caen.pimanager.model.ActionResult
 import tech.caen.pimanager.model.CheckResult
 import tech.caen.pimanager.model.CreateDeviceRequest
@@ -15,7 +16,9 @@ import tech.caen.pimanager.model.DeviceDetail
 import tech.caen.pimanager.model.DeviceOverview
 import tech.caen.pimanager.model.DeviceState
 import tech.caen.pimanager.model.LogsResponse
+import tech.caen.pimanager.model.MetricsResponse
 import tech.caen.pimanager.model.PiStatus
+import tech.caen.pimanager.model.RemoteLocation
 import tech.caen.pimanager.model.StreamEvent
 import tech.caen.pimanager.model.Summary
 import tech.caen.pimanager.model.UpdateDeviceRequest
@@ -23,6 +26,7 @@ import tech.caen.pimanager.notFound
 import tech.caen.pimanager.nowIso
 import tech.caen.pimanager.nowMillis
 import tech.caen.pimanager.ssh.ExecResult
+import tech.caen.pimanager.ssh.MetricsParser
 import tech.caen.pimanager.ssh.SshProvisioner
 import tech.caen.pimanager.ssh.SshService
 import tech.caen.pimanager.toIso
@@ -36,6 +40,7 @@ import java.io.File
  */
 class DeviceService(
     private val repo: DeviceRepository,
+    private val metricsRepo: MetricsRepository,
     private val ssh: SshService,
     private val provisioner: SshProvisioner,
     private val files: FileStore,
@@ -45,6 +50,8 @@ class DeviceService(
     private val remoteFilesDir: String,
     private val appDir: String,
     private val remoteAppDir: String,
+    private val setupTimeoutSeconds: Long,
+    private val metricsRetentionHours: Long,
 ) {
     private val log = LoggerFactory.getLogger(DeviceService::class.java)
 
@@ -98,6 +105,8 @@ class DeviceService(
 
     suspend fun delete(id: String) {
         if (!repo.delete(id)) throw notFound("Device '$id' introuvable")
+        runCatching { metricsRepo.deleteForDevice(id) }
+            .onFailure { log.warn("Purge des métriques de {} échouée: {}", id, it.message) }
     }
 
     suspend fun summary(): Summary {
@@ -119,6 +128,8 @@ class DeviceService(
         val previous = parseState(record.lastState)
         val pull = pull(record)
         repo.updateStatus(record.id, pull.state.name, pull.rawStatus, nowMillis(), pull.error)
+        // Relève des ressources (mémoire + CPU) quand le Pi est joignable par clé.
+        collectMetrics(record, pull.state)
         val updated = repo.get(record.id) ?: record
         val overview = toOverview(updated)
         val changed = previous != pull.state
@@ -183,11 +194,41 @@ class DeviceService(
         }
     }
 
+    // --- Métriques (mémoire + CPU, tendance) ---
+
+    /**
+     * Relève les ressources du Pi et persiste un échantillon. Best-effort : silencieux
+     * si le Pi n'est pas joignable par clé (états `not connected` / `new`) ou si la
+     * commande / le parsing échoue — la dérivation d'état ne doit jamais en pâtir.
+     * Publie l'échantillon en temps réel (`device.metrics`) pour alimenter le graphe.
+     */
+    private suspend fun collectMetrics(record: DeviceRecord, state: DeviceState) {
+        if (state == DeviceState.NOT_CONNECTED || state == DeviceState.NEW) return
+        val res = runCatching { ssh.readMetrics(record.host, record.sshUser) }.getOrNull() ?: return
+        if (!res.success) return
+        val sample = MetricsParser.parse(res.stdout) ?: return
+        runCatching {
+            metricsRepo.record(record.id, nowMillis(), sample, metricsRetentionHours * 3_600_000L)
+            eventBus.publish(StreamEvent("device.metrics", sample.at, record.id, metric = sample))
+        }.onFailure { log.warn("Métriques {} non enregistrées: {}", record.host, it.message) }
+    }
+
+    /** Série temporelle des ressources d'un device sur les [windowMinutes] dernières minutes. */
+    suspend fun metrics(id: String, windowMinutes: Int): MetricsResponse {
+        requireDevice(id)
+        val since = nowMillis() - windowMinutes * 60_000L
+        return MetricsResponse(
+            deviceId = id,
+            windowMinutes = windowMinutes,
+            samples = metricsRepo.since(id, since),
+        )
+    }
+
     // --- Setup (déploiement applicatif) ---
 
     /**
      * Phase de setup d'un Pi enrôlé (état `setup`) : zippe le répertoire applicatif
-     * local, l'envoie sur le Pi, le décompresse dans `~/.pi-manager` puis lance `setup.sh`.
+     * local, l'envoie sur le Pi, le décompresse dans `/opt/pi-manager` puis lance `setup.sh`.
      * En cas de succès, bascule l'état du fichier pi-swarm.json sur le Pi en `ready` (le
      * marqueur `managedBy` est préservé) et re-checke pour refléter `ready` immédiatement.
      */
@@ -225,7 +266,8 @@ class DeviceService(
             val deployCmd = "mkdir -p $remoteAppDir && " +
                 "unzip -o $remoteZip -d $remoteAppDir && rm -f $remoteZip && " +
                 "chmod +x $remoteAppDir/setup.sh $remoteAppDir/update.sh && bash $remoteAppDir/setup.sh"
-            val run = ssh.exec(record.host, record.sshUser, deployCmd)
+            // Timeout généreux : au premier passage, setup.sh installe LÖVE via apt.
+            val run = ssh.exec(record.host, record.sshUser, deployCmd, timeout = setupTimeoutSeconds)
             if (!run.success) {
                 return ActionResult(
                     ok = false,
@@ -387,7 +429,49 @@ class DeviceService(
 
     fun sshTarget(record: DeviceRecord): String = ssh.target(record.host, record.sshUser)
 
-    fun openTerminal(record: DeviceRecord): Boolean = ssh.openTerminal(record.host, record.sshUser)
+    fun openTerminal(record: DeviceRecord, cd: String? = null): Boolean =
+        ssh.openTerminal(record.host, record.sshUser, cd)
+
+    /**
+     * Emplacements notables sur le Pi (aide-mémoire du détail device) : application,
+     * app d'affichage, fichier d'état, unité systemd, sudoers. Dérivés des chemins
+     * configurés ([remoteAppDir], [remoteStatePath]) + constantes d'enrôlement.
+     */
+    private fun remoteLocations(): List<RemoteLocation> {
+        val stateDir = remoteStatePath.substringBeforeLast('/', "").ifBlank { "~" }
+        return listOf(
+            RemoteLocation(
+                label = "Application déployée",
+                path = remoteAppDir,
+                dir = remoteAppDir,
+                hint = "setup.sh, update.sh — scripts pilotés par pi-manager (sudo NOPASSWD)",
+            ),
+            RemoteLocation(
+                label = "App d'affichage (LÖVE)",
+                path = "$remoteAppDir/love",
+                dir = "$remoteAppDir/love",
+                hint = "main.lua, conf.lua — le signage Caen.tech",
+            ),
+            RemoteLocation(
+                label = "État / enrôlement",
+                path = remoteStatePath,
+                dir = stateDir,
+                hint = "pi-swarm.json — identité, marqueur managedBy, état (setup/ready)",
+            ),
+            RemoteLocation(
+                label = "Service systemd",
+                path = "$SYSTEMD_DIR/$SIGNAGE_SERVICE.service",
+                dir = SYSTEMD_DIR,
+                hint = "$SIGNAGE_SERVICE.service — lance LÖVE sur tty1 au boot",
+            ),
+            RemoteLocation(
+                label = "Sudoers",
+                path = "$SUDOERS_DIR/pi-manager",
+                dir = SUDOERS_DIR,
+                hint = "drop-in NOPASSWD : setup.sh/update.sh, systemctl, reboot, shutdown",
+            ),
+        )
+    }
 
     // --- Fichiers ---
 
@@ -475,6 +559,7 @@ class DeviceService(
         status = parseStatus(record.lastStatusJson),
         files = files.list(record.id),
         deferredControls = DEFERRED_CONTROLS,
+        remoteLocations = remoteLocations(),
         createdAt = record.createdAt.toIso(),
         updatedAt = record.updatedAt.toIso(),
         lastCheckedAt = record.lastCheckedAt?.toIso(),
@@ -482,6 +567,15 @@ class DeviceService(
     )
 
     companion object {
+        /** Répertoire des unités systemd où vit le service d'affichage (cf. pi-app/setup.sh). */
+        private const val SYSTEMD_DIR = "/etc/systemd/system"
+
+        /** Nom du service systemd d'affichage installé par pi-app/setup.sh. */
+        private const val SIGNAGE_SERVICE = "caentech-signage"
+
+        /** Répertoire des drop-ins sudoers (cf. SshProvisioner, enrôlement). */
+        private const val SUDOERS_DIR = "/etc/sudoers.d"
+
         /**
          * Contrôles liés à l'appli d'affichage : AFFICHÉS dans l'UI mais non
          * pilotables tant que l'appli n'existe pas. Les endpoints associés
