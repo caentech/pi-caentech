@@ -1,1 +1,23 @@
 music/*
+
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
+
+# Données runtime du backend (registre SQLite + fichiers uploadés)
+data
+.DS_Store
+
+# IDE
+.idea/
+
+# Artefacts du build web de l'app LÖVE (pi-app/web/build-web.sh)
+pi-app/web/.build/
+pi-app/web/dist/
+
+# Artefacts d'outillage (MCP, Playwright) et captures de debug
+.playwright-mcp/
+.mcp_data/
+/after-reinstall.png

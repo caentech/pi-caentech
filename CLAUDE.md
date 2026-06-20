@@ -4,56 +4,123 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Raspberry Pi kiosk runner for [caen.tech](https://caen.tech). Two bash scripts that turn a Pi into a wall-mounted display showing the `/interstice/` page (a per-room "what's happening now" view), with optional background music on HDMI.
+`pi-manager` — a backend + single-page web UI to manage a fleet of Raspberry Pi (eventually digital signage for the **Caen.tech** conference). It runs **locally on a Mac**, deploys **no agent** on the Pi, and drives everything over SSH. Kotlin/Ktor backend; vanilla-JS SPA served as static resources.
 
-`install.sh` clones this repo (the `pi-caentech` repository, into `~/caen.tech` by default) and runs `pi.sh setup && pi.sh build`. The site itself is **not built here** — `pi.sh build` mirrors the already-published site from `https://caen.tech` with `wget --mirror`. The scripts have **no dependency** on a clone of the upstream `caen.tech` source repo.
+Stack: Kotlin · Ktor (Netty) · kotlinx.serialization · coroutines · Exposed + SQLite · sshj. JDK 17.
 
 ## Commands
 
 ```bash
-./pi.sh setup                       # install cage, mpv, chromium, set TZ, force HDMI audio
-./pi.sh build                       # wget --mirror caen.tech into ./dist (+ /interstice/ explicitly)
-./pi.sh run conference              # kiosk for the main conference room
-./pi.sh run amphitheatre            # alias: auditorium (resolves to "auditorium")
-./pi.sh run tv                      # balanced view (lobby TV, no room highlighted)
-./pi.sh update                      # git pull + re-mirror + SIGTERM the running kiosk
-./pi.sh enable-autostart <salle>    # tty1 auto-login + launch kiosk at boot
-./pi.sh disable-autostart           # remove the auto-start block
+make run          # ./gradlew run — API + SPA on http://localhost:10028
+make build        # ./gradlew build
+make clean        # ./gradlew clean
+./gradlew compileKotlin   # fast compile check (no tests exist in this repo)
 ```
 
-Env overrides: `CAENTECH_HTTP_PORT` (default `4321`), `CAENTECH_SITE_URL` (default `https://caen.tech`).
+There is **no test suite**. Validate changes by running the server and exercising the API / UI (a real Pi is typically on the LAN at `caentech.local`). Useful probes:
 
-## Architecture
+```bash
+curl -s http://localhost:10028/api/health
+curl -s http://localhost:10028/api/devices   # overview + derived state per device
+curl -s http://localhost:10028/api/summary   # counts per state
+```
 
-`pi.sh run <salle>` is the only non-trivial command. It orchestrates three child processes inside a single trap-cleaned shell:
+**Server lifecycle gotcha:** `./gradlew run` forks a JVM that does **not** die when you stop the Gradle wrapper (or a background task). If a restart fails with exit 1 (port already bound), kill the orphan first:
 
-1. **HTTP server** — `python3 -m http.server` on `127.0.0.1:$HTTP_PORT`, serving `./dist` (the mirrored site, sibling of `pi.sh`).
-2. **Background music** (optional) — `mpv --no-video --loop-playlist=inf --shuffle --ao=alsa` over `music/*.mp3`. Skipped silently if no mp3 files are present.
-3. **Kiosk browser** — `cage -- chromium --kiosk` pointing at `http://localhost:$PORT/interstice/?salle=<salle>`. Runs in foreground; the trap kills the HTTP and music PIDs on exit.
+```bash
+pkill -f "tech.caen.pimanager.ApplicationKt"
+lsof -ti :10028 | xargs kill -9
+```
 
-The script writes its own PID to `$XDG_RUNTIME_DIR/caentech-kiosk/run.pid` so `cmd_update` can `kill -TERM` the running kiosk after a re-mirror — systemd or whatever supervises the kiosk is expected to restart it.
+## Core model: state is always SSH-pulled, never pushed
 
-Translation prompts are killed via `--disable-translate` + `--disable-features=Translate,TranslateUI` and `--lang=fr-FR` / `--accept-lang=fr-FR,fr`. Cursor handling has three layers (added in this order, each meant to address a failure mode of the previous):
+A background `Poller` (every `PI_MANAGER_POLL_INTERVAL_SECONDS`, default 30s) plus on-demand `POST /api/devices/{id}/check` derive each device's state by SSHing into it. The Pi never calls back. State derivation lives entirely in `DeviceService.pull()`:
 
-1. **Page CSS** (`cursor: none` in `/interstice/`) — covers in-page hover once a `wl_pointer.enter` has happened.
-2. **Transparent XCursor theme** (`ensure_blank_cursor_theme`) — generates a 32x32 all-zero-ARGB xcursor at `~/.icons/caentech-blank/cursors/default` plus symlinks for every standard cursor name (so nothing falls back via `Inherits`). `cmd_run` exports `XCURSOR_THEME=caentech-blank` and `XCURSOR_PATH=$HOME/.icons:/usr/share/icons:/usr/share/pixmaps`. The theme **must** live under one of libXcursor's default search paths (`~/.icons` or `/usr/share/icons`) — XDG paths like `~/.local/share/icons` are not searched, which is why an earlier attempt placing it there silently fell back to the default arrow theme.
-3. **Pointer nudge** (`start_pointer_nudge`) — synthesizes a single 1px pointer-motion event ~6 seconds after launch via a uinput device created with `python3-evdev`. On a kiosk with no physical mouse, no `wl_pointer.enter` ever fires, so Chromium never has the chance to call `wl_pointer.set_cursor(NULL)` from its CSS — leaving the compositor's default cursor stuck at screen center. One nudge is enough to trigger the surface-enter handshake. Requires `/dev/uinput` group=input mode 660 (set by `ensure_uinput_access` via `/etc/udev/rules.d/60-caentech-uinput.rules`) and the kiosk user in the `input` group.
+1. SSH unreachable (timeout/refused) → `not connected`
+2. SSH refused with `Permission denied` (no key yet) → `connection setup`
+3. SSH OK but the single config file is absent/invalid → `new`
+4. config file valid (`managedBy == "pi-manager"`), `state` ≠ ready → `setup`
+5. config file valid, `state == ready` → `ready`
 
-### Boot autostart
+The progression `connection setup → new → setup → ready` is the enrollment lifecycle. When changing states, the enum (`model/Models.kt` `DeviceState`, with `@SerialName` slugs), `pull()`, `Summary`, `fromSlug()`, and the **frontend** `STATE_KEY`/`STATE_META` maps must all stay in sync.
 
-`cmd_enable_autostart <salle>` does two things: enables console auto-login on tty1 via `raspi-config nonint do_boot_behaviour B2`, and appends a guarded block to `~/.bash_profile` that `exec`s `pi.sh run <salle>` when the shell is on `/dev/tty1` and `WAYLAND_DISPLAY` is unset. The block is bracketed by `# >>> caentech-kiosk auto-start >>>` / `# <<< caentech-kiosk auto-start <<<` markers so re-running the command (or `cmd_disable_autostart`) replaces it idempotently.
+### One file on the Pi: `pi-swarm.json`
 
-### Salle resolution
+Enrollment identity **and** runtime state are merged into a **single** file at `~/.pi-manager/pi-swarm.json` (`PiStatus`). `managedBy == "pi-manager"` is the enrollment marker that makes a device count as configured; `state` distinguishes `setup` from `ready`. The display app (`pi-app/love/`, see below) is expected to update this file and **preserve `managedBy`**.
 
-`resolve_salle()` is the only place where the room alias mapping lives: `amphi`/`amphitheatre`/`auditorium` all collapse to `auditorium` (the value the `/interstice/` page expects in its `?salle=` query param). `conference` and `tv` pass through.
+## SSH: two distinct paths, app-owned key only
 
-### Mirror layout
+- **`SshService`** — shells out to the system `ssh`/`scp` binaries for all routine access (check, exec, scp, logs). Authenticates **only** with pi-manager's own key. It deliberately ignores the user's `~/.ssh` via `-F /dev/null -o IdentitiesOnly=yes`, and adds `-i <key>` when the key exists. Host keys are centralized in the app's own `known_hosts` via `-o UserKnownHostsFile=<data/keys/known_hosts> -o StrictHostKeyChecking=accept-new` (never `~/.ssh/known_hosts`). Do not reintroduce reliance on `~/.ssh` keys/config/agent.
+- **`SshProvisioner`** — uses the sshj library with **password** auth. This is the **only** password path, used once during `configure` for an idempotent bootstrap pass: (1) verify the Pi's host key in **TOFU** via `TofuHostKeyVerifier` (remember on first sight in the app's `known_hosts`, refuse if changed → MITM), (2) install the public key in `~/.ssh/authorized_keys` (no dup), (3) install the **NOPASSWD sudoers** drop-in `/etc/sudoers.d/pi-manager` (authorizing `/opt/pi-manager/setup.sh`, `/opt/pi-manager/update.sh`, systemctl, reboot, shutdown) — validated with `visudo -cf` **before** install, the single privileged write that pipes the password to `sudo -S` — plus create `/opt/pi-manager` owned by the deploying account (so the key-based `setup` phase can drop `setup.sh`/`update.sh` there, at the sudoers-authorized paths), (4) write `pi-swarm.json` **last** so a sudoers failure never leaves a half-enrolled device. The password is never logged or stored. After enrollment the Pi is driveable by key with passwordless sudo.
 
-`pi.sh build` writes to `$SCRIPT_DIR/dist` (i.e. **`./dist` next to `pi.sh`**). `/interstice/` is fetched explicitly because it is excluded from the sitemap. The build sanity-checks that `dist/interstice/index.html` exists before declaring success.
+- **`TofuHostKeyVerifier`** — sshj `HostKeyVerifier` backing the app's OpenSSH-format `known_hosts` (`PI_MANAGER_KNOWN_HOSTS_FILE`, default `data/keys/known_hosts`), shared with `SshService`. Exposes the SHA256 fingerprint (`lastFingerprint`) surfaced at enrollment.
 
-## Conventions for this repo
+The global key pair (`data/keys/pi-swarm_ed25519`) is generated on demand by `SshProvisioner.ensurePublicKey()` and shared across the whole fleet. The `ssh ...` command shown in the UI / copied to clipboard (`SshService.command()`) includes `-i <absolute key path>` and the app's `UserKnownHostsFile` when the key exists, so a human connects with the same identity and host-key state as pi-manager.
 
-- **Self-contained git repository.** `pi.sh update` runs `git pull --ff-only` from `$SCRIPT_DIR` — that's the `pi-caentech` repo itself. There is no longer any dependency on a parent `caen.tech` source clone.
-- **No frontend/backend conventions apply.** The global rules in `~/.claude/` for Memo Bank projects (commit format, module structure, etc.) are not relevant here. Use plain imperative commit messages if/when committing upstream.
-- Shell scripts use `set -euo pipefail` and the `log`/`warn`/`fail` helpers — keep that pattern when adding commands.
-- `cmd_*` functions are dispatched from `main()`'s case statement; add new commands by following the same shape and updating `usage()`.
+## Layering
+
+- `Application.kt` — wires everything (`module()`): builds `SshService`, `SshProvisioner`, `DeviceRepository`, `FileStore`, `EventBus`, `DeviceService`, installs Ktor plugins, starts the `Poller`.
+- `Routing.kt` — all HTTP routes. Display-app controls (music/slide/cache/etc.) are stubs returning **501** (`DeviceService.DEFERRED_CONTROLS`) until the display app exists.
+- `service/DeviceService.kt` — orchestration hub: registry CRUD, state derivation, configure/setup, device actions, files, logs. This is where state is derived and where real-time events are published.
+- `service/EventBus.kt` + SSE — real-time is **SSE only** (`GET /api/stream`); there is no WebSocket. State changes and actions publish `StreamEvent`s the SPA consumes.
+- `db/` — Exposed + SQLite (`data/pi-manager.db`); the repo persists the last derived state/status JSON per device.
+- `Config.kt` — every setting is overridable via env var (or `-D` system property) with Mac-local defaults. Remote paths (`PI_MANAGER_STATE_PATH`, etc.) may contain `~` (expanded by the remote shell).
+
+## Frontend
+
+`src/main/resources/web/` (`index.html`, `app.js`, `styles.css`) — a dependency-free SPA served by Ktor `staticResources`. Editing it requires **restarting the server** (Gradle copies resources into `build/resources/main` at build time; the running JVM serves from there). `app.js` maps backend state slugs to its own keys (`STATE_KEY`) and renders per-state cards, detail panels, and SSE-driven live updates. Light/dark theming via CSS custom props (`--st-*` per state).
+
+## Display app (`pi-app/love/`)
+
+The signage display app driven onto each Pi: a [LÖVE](https://love2d.org) (Lua) app
+rendering a rotating set of screens (programme, à suivre, infos, sponsors) from
+caen.tech's `program/model.json`. `pi-app/setup.sh` installs LÖVE and deploys it;
+`pi-app/update.sh` refreshes it.
+
+**Prerequisite — install online, runtime offline.** Enrollment/setup happens **online**
+(the day before), but the app **must assume it boots with no network** (venue Wi-Fi
+flaky/absent at startup). Concretely:
+
+- **Cache pre-filled at setup** (`pi-app/setup.sh` step 6): the cache is **not** left to
+  be populated by the first online run of the app — the signage service waits for an
+  HDMI screen before launching LÖVE (`run-signage.sh`), and Pis are often provisioned
+  screenless, so that run may never happen during setup. Instead `setup.sh` runs LÖVE
+  **headless** once (`CAENTECH_PREFETCH=1`, as the display user) to download the program
+  + visuals into the cache right then. This reuses the app's own download path
+  (`src/fetch_thread.lua`) so the cache is built exactly as the running app expects.
+  Headless = no window, no graphics (see `conf.lua`): no screen/GPU required. Failure is
+  **non-blocking** (the app retries at runtime). `main.lua` drives the prefetch loop and
+  exits 0/1 on success/failure.
+- **Offline-first asset loading** (`src/program.lua`): every visual (logos, speaker
+  photos) is loaded from the on-disk cache **immediately** if present, then a
+  background refresh is queued; the fresh version replaces it only if the download
+  succeeds. Never gate display on a successful fetch. The setup screen likewise shows
+  the cached program at once and refreshes only if a connection is available.
+- **Cache writes are atomic** (`src/fetch_thread.lua`): downloads/conversions go to a
+  `.part` file, renamed onto the real cache path only on success — an interrupted
+  refresh must never corrupt the cache the next offline boot depends on.
+- **Logo conversion preserves aspect ratio**: SVG/webp logos are converted (rsvg /
+  magick) constraining **one** dimension only (e.g. `rsvg-convert -h 300`); never fix
+  both width and height (that stretches non-landscape logos). The sponsors screen
+  fit-scales within the card, so only the ratio matters.
+
+**Background music** (`src/music.lua`): loops an MP3 dropped on the Pi via pi-manager's
+**dropbox** (scp to `~/.pi-manager/files/`, cf. `DeviceService.pushFile`). The file
+lives **outside** the LÖVE save dir, so it's read with `io.open` and wrapped in a
+streaming source (env override `CAENTECH_MUSIC_FILE`, else first `*.mp3` in the dropbox
+dir). The `musicEnabled` setting (settings.json, **default true**, toggled on the setup
+screen) gates playback — a Pi can be configured silent even with an MP3 present; if an
+MP3 is there at boot and the setting is on, it plays. Only checked **at startup** (MP3s
+dropped later need a service restart). Audio modules are re-enabled in `conf.lua` (off
+only in prefetch); `setup.sh`'s unit no longer forces `SDL_AUDIODRIVER=dummy` (LÖVE
+outputs via OpenAL→ALSA). All of `music.lua` is `pcall`-guarded — a missing file or no
+audio device never breaks the display.
+
+Cache lives in the LÖVE save dir (`~/Library/Application Support/LOVE/caentech-signage/`
+on the Mac dev). Headless capture for verifying a screen offline:
+`CAENTECH_PROGRAM_URL=http://127.0.0.1:1/dead CAENTECH_SHOT=sponsors@11:00 CAENTECH_SHOT_OUT=/tmp/shot.png love pi-app/love`.
+
+## Conventions
+
+- French is used throughout for UI text, KDoc, comments, and commit messages. Commit style: `pi-manager : <description>` (see `git log`).
+- This is a personal project — the global "Memo Bank" backend/frontend rules (Spring Boot, ticket-prefixed commits, etc.) do **not** apply here.

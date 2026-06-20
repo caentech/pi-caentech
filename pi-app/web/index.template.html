@@ -1,0 +1,82 @@
+<!doctype html>
+<!--
+  Page hôte de la preview web (signage Caen.tech) — remplace l'index.html par défaut
+  de love.js (cf. pi-app/web/build-web.sh). Le canvas occupe toute la fenêtre et est
+  mis à l'échelle en conservant le ratio 16:9 (object-fit: contain) : la preview tient
+  dans n'importe quelle fenêtre, sans bouton « plein écran » à cliquer.
+  Les marqueurs @TITLE@ / @MEMORY@ sont substitués au build.
+-->
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <title>@TITLE@</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #0f0f12; overflow: hidden; }
+    #canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; outline: none; }
+    #loading {
+      position: fixed; inset: 0; z-index: 10;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+      background: #0f0f12; color: #e8e8ea; transition: opacity .4s ease;
+      font: 600 16px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #loading .bar { width: 240px; height: 6px; border-radius: 3px; background: #2a2a30; overflow: hidden; }
+    #loading .bar > i { display: block; height: 100%; width: 0; background: #f5d300; transition: width .2s ease; }
+    #loading small { color: #8a8a92; font-weight: 400; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <div id="loading">
+    <div>Caen.tech — signage</div>
+    <div class="bar"><i id="bar"></i></div>
+    <small id="status">Chargement…</small>
+  </div>
+
+  <script>
+    var loadingEl = document.getElementById('loading');
+    var barEl     = document.getElementById('bar');
+    var statusEl  = document.getElementById('status');
+
+    // Le diaporama gère espace/flèches : on évite que la page défile.
+    window.addEventListener('keydown', function (e) {
+      if ([32, 37, 38, 39, 40].indexOf(e.keyCode) > -1) e.preventDefault();
+    });
+    var focusCanvas = function () { window.focus(); document.getElementById('canvas').focus(); };
+    window.onload = focusCanvas;
+    window.onclick = focusCanvas;
+
+    var Module = {
+      arguments: ["./game.love"],
+      INITIAL_MEMORY: @MEMORY@,
+      printErr: console.error.bind(console),
+      canvas: document.getElementById('canvas'),
+      totalDependencies: 0,
+      remainingDependencies: 0,
+      setStatus: function (text) {
+        if (text) {
+          statusEl.textContent = text;
+          var m = text.match(/\((\d+)\/(\d+)\)/);
+          if (m) barEl.style.width = (100 * (+m[1]) / (+m[2])) + '%';
+        } else if (Module.remainingDependencies === 0) {
+          barEl.style.width = '100%';
+          loadingEl.classList.add('hidden');
+        }
+      },
+      monitorRunDependencies: function (left) {
+        this.remainingDependencies = left;
+        this.totalDependencies = Math.max(this.totalDependencies, left);
+        Module.setStatus(left
+          ? 'Préparation… (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')'
+          : '');
+      }
+    };
+    Module.setStatus('Téléchargement…');
+    window.onerror = function () { Module.setStatus('Erreur — voir la console JavaScript.'); };
+    var applicationLoad = function () { Love(Module); };
+  </script>
+  <script src="game.js"></script>
+  <script async src="love.js" onload="applicationLoad(this)"></script>
+</body>
+</html>
