@@ -1,4 +1,4 @@
-.PHONY: run love build clean help
+.PHONY: run love web web-serve build clean help
 .DEFAULT_GOAL := help
 
 run: ## Démarre l'application (API + frontend) sur http://localhost:10028
@@ -6,6 +6,12 @@ run: ## Démarre l'application (API + frontend) sur http://localhost:10028
 
 love: ## Lance l'application d'affichage LÖVE localement
 	love pi-app/love
+
+web: ## Construit la preview web de l'app LÖVE (cache embarqué) dans pi-app/web/dist
+	./pi-app/web/build-web.sh
+
+web-serve: ## Sert la preview web sur http://localhost:8080 (après make web)
+	cd pi-app/web/dist && python3 -m http.server 8080
 
 build: ## Compile et assemble le projet
 	./gradlew build

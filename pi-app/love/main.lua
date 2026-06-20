@@ -27,6 +27,11 @@ local music      = require("src.music")
 
 local STAGE_W, STAGE_H = 1920, 1080
 
+-- Export web (love.js, cf. pi-app/web) : pas de réseau (fetch désactivé, cf. src/fetch.lua)
+-- ni de dropbox (musique). L'app lit alors uniquement le cache EMBARQUÉ dans le .love,
+-- pré-rempli au build. On saute donc le fetch réseau et le chargement de la musique.
+local WEB = love.system.getOS() == "Web"
+
 local state = "setup"        -- "setup" | "loop"
 local cfg
 local stage                  -- canvas 1920×1080
@@ -92,7 +97,7 @@ function love.load()
 
     background.load()
     program.loadFromCache()
-    program.fetchFromUrl(url)
+    if not WEB then program.fetchFromUrl(url) end
 
     stage = love.graphics.newCanvas(STAGE_W, STAGE_H)
     stage:setFilter("linear", "linear")
@@ -101,7 +106,8 @@ function love.load()
 
     -- Musique de fond : lit en boucle le MP3 déposé via la dropbox si présent et si le
     -- réglage l'autorise (cf. src/music.lua). Défensif : jamais bloquant pour l'affichage.
-    music.load(cfg.musicEnabled)
+    -- (Sur le web : pas de dropbox — on n'initialise pas la musique.)
+    if not WEB then music.load(cfg.musicEnabled) end
 
     -- Mode capture scriptable.
     local spec = os.getenv("CAENTECH_SHOT")

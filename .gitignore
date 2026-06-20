@@ -13,6 +13,10 @@ data
 # IDE
 .idea/
 
+# Artefacts du build web de l'app LÖVE (pi-app/web/build-web.sh)
+pi-app/web/.build/
+pi-app/web/dist/
+
 # Artefacts d'outillage (MCP, Playwright) et captures de debug
 .playwright-mcp/
 .mcp_data/

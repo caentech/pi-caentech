@@ -34,13 +34,22 @@ function love.conf(t)
     end
 
     local windowed = os.getenv("CAENTECH_WINDOWED")
+    -- Export web (love.js, cf. pi-app/web) : fenêtre fixe 1920×1080. La page HTML met
+    -- ensuite le canvas à l'échelle de la fenêtre du navigateur en conservant le ratio
+    -- (object-fit). Inerte hors web (love.system absent en conf → garde pcall-équivalente).
+    local isWeb = love.system and love.system.getOS and love.system.getOS() == "Web"
 
     t.window.title = "Caen.tech"
     t.window.vsync = 1
     t.window.resizable = false
     t.window.highdpi = true
 
-    if windowed then
+    if isWeb then
+        t.window.width = 1920
+        t.window.height = 1080
+        t.window.fullscreen = false
+        t.window.borderless = false
+    elseif windowed then
         t.window.width = 1280
         t.window.height = 720
         t.window.fullscreen = false
