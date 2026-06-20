@@ -46,7 +46,7 @@ The progression `connection setup → new → setup → ready` is the enrollment
 
 ### One file on the Pi: `pi-swarm.json`
 
-Enrollment identity **and** runtime state are merged into a **single** file at `~/.pi-manager/pi-swarm.json` (`PiStatus`). `managedBy == "pi-manager"` is the enrollment marker that makes a device count as configured; `state` distinguishes `setup` from `ready`. The display app (not built yet) is expected to update this file and **preserve `managedBy`**.
+Enrollment identity **and** runtime state are merged into a **single** file at `~/.pi-manager/pi-swarm.json` (`PiStatus`). `managedBy == "pi-manager"` is the enrollment marker that makes a device count as configured; `state` distinguishes `setup` from `ready`. The display app (`pi-app/love/`, see below) is expected to update this file and **preserve `managedBy`**.
 
 ## SSH: two distinct paths, app-owned key only
 
@@ -69,6 +69,33 @@ The global key pair (`data/keys/pi-swarm_ed25519`) is generated on demand by `Ss
 ## Frontend
 
 `src/main/resources/web/` (`index.html`, `app.js`, `styles.css`) — a dependency-free SPA served by Ktor `staticResources`. Editing it requires **restarting the server** (Gradle copies resources into `build/resources/main` at build time; the running JVM serves from there). `app.js` maps backend state slugs to its own keys (`STATE_KEY`) and renders per-state cards, detail panels, and SSE-driven live updates. Light/dark theming via CSS custom props (`--st-*` per state).
+
+## Display app (`pi-app/love/`)
+
+The signage display app driven onto each Pi: a [LÖVE](https://love2d.org) (Lua) app
+rendering a rotating set of screens (programme, à suivre, infos, sponsors) from
+caen.tech's `program/model.json`. `pi-app/setup.sh` installs LÖVE and deploys it;
+`pi-app/update.sh` refreshes it.
+
+**Prerequisite — install online, runtime offline.** Enrollment/setup happens **online**
+(apt installs LÖVE, the first asset fetch populates the cache). But the app **must
+assume it boots with no network** (venue Wi-Fi flaky/absent at startup). Concretely:
+
+- **Offline-first asset loading** (`src/program.lua`): every visual (logos, speaker
+  photos) is loaded from the on-disk cache **immediately** if present, then a
+  background refresh is queued; the fresh version replaces it only if the download
+  succeeds. Never gate display on a successful fetch.
+- **Cache writes are atomic** (`src/fetch_thread.lua`): downloads/conversions go to a
+  `.part` file, renamed onto the real cache path only on success — an interrupted
+  refresh must never corrupt the cache the next offline boot depends on.
+- **Logo conversion preserves aspect ratio**: SVG/webp logos are converted (rsvg /
+  magick) constraining **one** dimension only (e.g. `rsvg-convert -h 300`); never fix
+  both width and height (that stretches non-landscape logos). The sponsors screen
+  fit-scales within the card, so only the ratio matters.
+
+Cache lives in the LÖVE save dir (`~/Library/Application Support/LOVE/caentech-signage/`
+on the Mac dev). Headless capture for verifying a screen offline:
+`CAENTECH_PROGRAM_URL=http://127.0.0.1:1/dead CAENTECH_SHOT=sponsors@11:00 CAENTECH_SHOT_OUT=/tmp/shot.png love pi-app/love`.
 
 ## Conventions
 

@@ -56,15 +56,27 @@ while true do
     local job = reqCh:demand()
     if job.quit then return end
 
+    -- Écriture atomique : on produit d'abord un `.part`, renommé sur job.out seulement
+    -- en cas de succès. Un rafraîchissement interrompu (réseau coupé en cours) ne
+    -- corrompt donc jamais le fichier de cache dont dépend le démarrage hors ligne.
     local ok, err = false, nil
+    local part = job.out .. ".part"
     if not job.conv then
-        ok = download(job.url, job.out)
-        if not ok then err = "téléchargement échoué" end
+        if download(job.url, part) then
+            ok = os.rename(part, job.out)
+            if not ok then os.remove(part); err = "écriture du cache échouée" end
+        else
+            os.remove(part); err = "téléchargement échoué"
+        end
     else
         local src = job.out .. "." .. job.conv
         if download(job.url, src) then
-            ok = convert(job.conv, src, job.out)
-            if not ok then err = "conversion " .. job.conv .. " indisponible" end
+            if convert(job.conv, src, part) then
+                ok = os.rename(part, job.out)
+                if not ok then os.remove(part); err = "écriture du cache échouée" end
+            else
+                os.remove(part); err = "conversion " .. job.conv .. " indisponible"
+            end
             os.remove(src)
         else
             err = "téléchargement échoué"

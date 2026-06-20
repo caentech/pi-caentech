@@ -29,15 +29,40 @@ local function extOf(url)
     return (url:match("%.([%a%d]+)$") or ""):lower()
 end
 
+-- Charge l'image `rel` (déjà sur disque) dans program.assets. Renvoie true si chargée.
+local function loadAsset(id, rel)
+    local okImg, img = pcall(love.graphics.newImage, rel)
+    if not okImg then return false end
+    img:setFilter("linear", "linear")
+    if id == "logoMain" then
+        program.assets.logoMain = img
+    elseif id:sub(1, 4) == "spk:" then
+        program.assets.speaker[id:sub(5)] = img
+    elseif id:sub(1, 4) == "spo:" then
+        program.assets.sponsor[id:sub(5)] = img
+    end
+    return true
+end
+
 -- --- Téléchargement des visuels -----------------------------------------------
+-- Offline-first : le démarrage se fait potentiellement HORS LIGNE (cf. CLAUDE.md).
+-- Pour chaque visuel : si une version est déjà en cache, on l'AFFICHE tout de suite,
+-- PUIS on lance un téléchargement de rafraîchissement en tâche de fond. Quand (et si)
+-- il aboutit, `onFetched` remplace l'image par la version fraîche ; s'il échoue
+-- (hors ligne), la version en cache reste affichée.
+local function requestAsset(job)
+    if love.filesystem.getInfo(job.rel) then loadAsset(job.id, job.rel) end
+    fetch.request(job)
+end
+
 local function requestAssets()
-    fetch.request({ id = "logoMain", url = LOGO_MAIN_URL, rel = "cache/logo-main.png" })
+    requestAsset({ id = "logoMain", url = LOGO_MAIN_URL, rel = "cache/logo-main.png" })
 
     for id, sp in pairs(program.data.speakers) do
         if sp.photoUrl and sp.photoUrl ~= "" then
             local e = extOf(sp.photoUrl)
             if e == "jpg" or e == "jpeg" or e == "png" then
-                fetch.request({ id = "spk:" .. id, url = sp.photoUrl, rel = "cache/spk/" .. id .. "." .. e })
+                requestAsset({ id = "spk:" .. id, url = sp.photoUrl, rel = "cache/spk/" .. id .. "." .. e })
             end
         end
     end
@@ -48,23 +73,8 @@ local function requestAssets()
             local conv = (e == "webp" and "webp") or (e == "svg" and "svg") or nil
             local rel  = conv and ("cache/sponsor/" .. s.id .. ".png")
                          or ("cache/sponsor/" .. s.id .. "." .. e)
-            fetch.request({ id = "spo:" .. s.id, url = s.logo, rel = rel, conv = conv })
+            requestAsset({ id = "spo:" .. s.id, url = s.logo, rel = rel, conv = conv })
         end
-    end
-end
-
--- Intègre un asset téléchargé (appelé depuis main via program.onFetched).
-local function loadAsset(id, rel, ok)
-    if not ok then return end
-    local okImg, img = pcall(love.graphics.newImage, rel)
-    if not okImg then return end
-    img:setFilter("linear", "linear")
-    if id == "logoMain" then
-        program.assets.logoMain = img
-    elseif id:sub(1, 4) == "spk:" then
-        program.assets.speaker[id:sub(5)] = img
-    elseif id:sub(1, 4) == "spo:" then
-        program.assets.sponsor[id:sub(5)] = img
     end
 end
 
@@ -77,8 +87,9 @@ function program.onFetched(events)
             else
                 program.status = { state = "error", message = e.err or "échec du téléchargement", sessions = 0 }
             end
-        else
-            loadAsset(e.id, e.rel, e.ok)
+        elseif e.ok then
+            -- Rafraîchissement abouti : remplace la version (éventuellement) chargée du cache.
+            loadAsset(e.id, e.rel)
         end
     end
 end
