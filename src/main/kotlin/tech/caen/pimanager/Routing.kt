@@ -115,12 +115,17 @@ fun Application.configureRouting(service: DeviceService, eventBus: EventBus, sta
                     post("/shutdown") {
                         call.respond(service.shutdown(service.requireDevice(call.id())))
                     }
-                    // Actions DIFFÉRÉES (appli d'affichage inexistante) -> 501.
+                    // Pilotage de l'appli d'affichage (via SSH + systemctl NOPASSWD).
+                    post("/restart-app") {
+                        call.respond(service.restartApp(service.requireDevice(call.id())))
+                    }
+                    post("/cache/clear") {
+                        call.respond(service.clearCache(service.requireDevice(call.id())))
+                    }
+                    // Actions DIFFÉRÉES (pas encore pilotables côté appli) -> 501.
                     post("/music") { call.notImplemented("music") }
                     post("/slide") { call.notImplemented("slide") }
-                    post("/cache/clear") { call.notImplemented("cache") }
                     post("/display-type") { call.notImplemented("displayType") }
-                    post("/restart-app") { call.notImplemented("restart") }
                     post("/update-app") { call.notImplemented("update") }
                 }
 

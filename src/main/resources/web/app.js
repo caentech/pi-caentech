@@ -667,7 +667,7 @@ async function uploadFiles(deviceId, fileList, push) {
   const fd = new FormData();
   for (const f of fileList) fd.append('file', f);
   try {
-    const saved = await api(`/devices/${deviceId}/files`, { multipart: fd });
+    const saved = await api(`/devices/${deviceId}/files`, { method: 'POST', multipart: fd });
     toast('Fichier déposé', `${saved.length} fichier(s) sur le contrôleur`, 'ok');
     if (push) for (const s of saved) await pushFileSilent(deviceId, s.id);
     if (view.name === 'detail' && view.deviceId === deviceId) openDetail(deviceId);
@@ -864,8 +864,8 @@ function renderDetail() {
       `<button class="${d.display === key ? 'is-active' : ''}" data-disp="${key}">${m.icon}${m.label}</button>`).join('');
     const slide = d.slide || { idx: 1, total: 1, title: '—', dwell: 15 };
     settings = `<div class="panel">
-      <div class="panel__title">Paramètres d'affichage <span class="count">· lecture seule</span></div>
-      <div class="setting__hint" style="margin:-6px 0 8px">${DEFERRED_MSG}</div>
+      <div class="panel__title">Paramètres d'affichage</div>
+      <div class="setting__hint" style="margin:-6px 0 8px">Musique, type d'affichage et slides ne sont pas encore pilotables ; le vidage du cache, lui, est actif.</div>
       <div class="setting">
         <div><div class="setting__label">Musique d'ambiance</div><div class="setting__hint">Lecture audio sur la sortie HDMI</div></div>
         <div class="toggle ${d.music ? 'is-on' : ''}" id="music" role="switch" aria-checked="${d.music}"></div>
@@ -878,7 +878,7 @@ function renderDetail() {
         <div><div class="setting__label">Cache de page</div>
           <div class="cache-state" style="margin-top:4px"><span class="cache-state__dot" style="background:${d.cache === 'ok' ? 'var(--st-ready)' : 'var(--st-setup)'}"></span>${d.cache === 'ok' ? 'À jour' : 'Périmé — rebuild conseillé'}</div>
         </div>
-        <button class="btn btn--sm" data-deferred>${ICN.refresh} Vider le cache</button>
+        <button class="btn btn--sm" id="clear-cache">${ICN.refresh} Vider le cache</button>
       </div>
       <div class="setting">
         <div><div class="setting__label">Slide courant</div><div class="setting__hint">${esc(slide.title || 'Diapositive affichée')}</div></div>
@@ -1015,7 +1015,20 @@ function bindDetail(d) {
   if (music) music.onclick = () => toast('Contrôle indisponible', DEFERRED_MSG, 'info');
   $$('[data-disp]').forEach(b => b.onclick = () => toast('Contrôle indisponible', DEFERRED_MSG, 'info'));
   $$('[data-deferred]').forEach(b => b.onclick = () => toast('Contrôle indisponible', DEFERRED_MSG, 'info'));
-  $('#restart-app') && ($('#restart-app').onclick = () => toast('Contrôle indisponible', DEFERRED_MSG, 'info'));
+
+  /* contrôles de l'appli d'affichage réellement pilotables (SSH + systemctl) */
+  $('#restart-app') && ($('#restart-app').onclick = () => confirmAction({
+    title: "Redémarrer l'affichage ?",
+    text: `L'appli d'affichage de <code>${esc(d.name)}</code> sera relancée (quelques secondes d'écran noir). Le Pi n'est pas redémarré.`,
+    confirmLabel: "Redémarrer l'affichage",
+    onConfirm: () => deviceAction(d.id, 'restart-app', 'Affichage redémarré'),
+  }));
+  $('#clear-cache') && ($('#clear-cache').onclick = () => confirmAction({
+    title: 'Vider le cache de page ?',
+    text: `Les visuels téléchargés (logos, photos, programme) de <code>${esc(d.name)}</code> seront supprimés, puis l'affichage redémarré pour les re-télécharger. Hors ligne, l'écran restera incomplet jusqu'au retour du réseau.`,
+    confirmLabel: 'Vider le cache',
+    onConfirm: () => deviceAction(d.id, 'cache/clear', 'Cache vidé — affichage redémarré'),
+  }));
 
   $('#run-setup') && ($('#run-setup').onclick = () => openConfigure(d));
   $('#configure') && ($('#configure').onclick = () => openConfigure(d));

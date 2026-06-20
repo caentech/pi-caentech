@@ -423,6 +423,54 @@ class DeviceService(
         )
     }
 
+    /**
+     * Redémarre l'unité systemd d'affichage ([SIGNAGE_SERVICE]) — `systemctl restart`,
+     * autorisé sans mot de passe par le sudoers NOPASSWD. Relance l'appli LÖVE (qui relit
+     * son cache et son programme) sans rebooter le Pi : quelques secondes d'écran noir.
+     */
+    suspend fun restartApp(record: DeviceRecord): ActionResult {
+        val res = ssh.exec(record.host, record.sshUser, "sudo -n systemctl restart $SIGNAGE_SERVICE")
+        if (res.success) {
+            eventBus.publish(StreamEvent("device.action", nowIso(), record.id, message = "restart: affichage redémarré"))
+        }
+        return ActionResult(
+            ok = res.success,
+            action = "restart",
+            exitCode = res.exitCode,
+            output = res.stdout.trim().ifBlank { null },
+            error = res.stderr.trim().ifBlank { null },
+            message = if (res.success) "Affichage redémarré" else "Échec du redémarrage de l'affichage",
+        )
+    }
+
+    /**
+     * Vide le cache d'assets de l'appli d'affichage (logos, photos, programme téléchargés)
+     * puis redémarre l'affichage pour forcer un re-téléchargement. Le cache vit dans le
+     * save dir LÖVE du compte qui lance le service (identité LÖVE = [SIGNAGE_SERVICE], et ce
+     * compte est aussi le compte SSH) ; on ne supprime que le sous-dossier `cache/` afin de
+     * préserver les réglages persistés (URL, mode, heure) écrits à la racine du save dir.
+     *
+     * Attention : un vidage hors ligne laisse l'affichage sans visuels jusqu'au retour du
+     * réseau — c'est une action délibérée de l'opérateur.
+     */
+    suspend fun clearCache(record: DeviceRecord): ActionResult {
+        // Save dir LÖVE sous Linux : $XDG_DATA_HOME/love/<identité> (défaut ~/.local/share/...).
+        val cacheDir = "\${XDG_DATA_HOME:-\$HOME/.local/share}/love/$SIGNAGE_SERVICE/cache"
+        val cmd = "rm -rf \"$cacheDir\" && sudo -n systemctl restart $SIGNAGE_SERVICE"
+        val res = ssh.exec(record.host, record.sshUser, cmd)
+        if (res.success) {
+            eventBus.publish(StreamEvent("device.action", nowIso(), record.id, message = "cache: cache vidé, affichage redémarré"))
+        }
+        return ActionResult(
+            ok = res.success,
+            action = "cache",
+            exitCode = res.exitCode,
+            output = res.stdout.trim().ifBlank { null },
+            error = res.stderr.trim().ifBlank { null },
+            message = if (res.success) "Cache vidé — affichage redémarré (re-téléchargement)" else "Échec du vidage du cache",
+        )
+    }
+
     // --- SSH (accès rapide) ---
 
     fun sshCommand(record: DeviceRecord): String = ssh.command(record.host, record.sshUser)
@@ -584,9 +632,7 @@ class DeviceService(
         val DEFERRED_CONTROLS = listOf(
             DeferredControl("music", "Musique on/off", false, "Nécessite l'appli d'affichage (à venir)"),
             DeferredControl("slide", "Changer de slide", false, "Nécessite l'appli d'affichage (à venir)"),
-            DeferredControl("cache", "Vider le cache de page", false, "Nécessite l'appli d'affichage (à venir)"),
             DeferredControl("displayType", "Type d'affichage", false, "Nécessite l'appli d'affichage (à venir)"),
-            DeferredControl("restart", "Redémarrer l'appli", false, "Nécessite l'appli d'affichage (à venir)"),
             DeferredControl("update", "Mise à jour applicative", false, "Nécessite l'appli d'affichage (à venir)"),
         )
     }
