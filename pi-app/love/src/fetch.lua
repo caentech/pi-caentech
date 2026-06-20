@@ -21,13 +21,14 @@ function fetch.start()
     thread:start()
 end
 
--- Demande un téléchargement. job = { id, url, rel, conv = nil|"webp"|"svg" }
+-- Demande un téléchargement. job = { id, url, rel, conv = nil|"webp"|"svg", maxH = nil|px }
 -- `rel` : chemin relatif au save dir (ex. "cache/logo/x.png").
+-- `maxH` : hauteur max en px — l'image PNG produite est réduite si plus haute (Pi).
 function fetch.request(job)
     local dir = parentDir(job.rel)
     if dir then love.filesystem.createDirectory(dir) end
     pending[job.id] = job.rel
-    reqCh:push({ id = job.id, url = job.url, out = saveDir .. "/" .. job.rel, conv = job.conv })
+    reqCh:push({ id = job.id, url = job.url, out = saveDir .. "/" .. job.rel, conv = job.conv, maxH = job.maxH })
 end
 
 -- Récupère les téléchargements terminés. Renvoie une liste { id, rel, ok, err }.
@@ -40,6 +41,14 @@ function fetch.poll()
         r = doneCh:pop()
     end
     return out
+end
+
+-- Nombre de téléchargements encore en cours (demandés, pas encore terminés).
+-- Sert au mode pré-téléchargement headless pour savoir quand le cache est complet.
+function fetch.pendingCount()
+    local n = 0
+    for _ in pairs(pending) do n = n + 1 end
+    return n
 end
 
 function fetch.stop()

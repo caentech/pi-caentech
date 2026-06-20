@@ -12,6 +12,7 @@ local theme  = require("src.theme")
 local ui     = require("src.ui")
 local clock  = require("src.clock")
 local config = require("src.config")
+local music  = require("src.music")
 local lg     = love.graphics
 
 local M = {}
@@ -37,6 +38,10 @@ local function forceUpdate()
 end
 
 local function start()
+    -- Sans programme chargé (ni cache ni réseau), la boucle rendrait des champs nil
+    -- (date, lieu, sessions) → crash. On reste sur la configuration ; le pied de page
+    -- l'explique. Le diaporama démarrera dès qu'un programme sera disponible.
+    if not prog.isLoaded() then return end
     config.save(cfg)
     applyTime()
     if M.onStart then M.onStart() end
@@ -55,6 +60,9 @@ local function buildFields()
           opts = { { "all", "Tout" }, { "conference", "Conférence" }, { "auditorium", "Amphithéâtre" } } },
         { kind = "choice", key = "thisRoom", label = "Salle de cet écran",
           opts = { { "none", "Non affichée" }, { "conference", "Conférence" }, { "auditorium", "Amphithéâtre" } } },
+        { kind = "choice", key = "musicEnabled", label = "Musique de fond",
+          opts = { { true, "Activée" }, { false, "Désactivée" } },
+          dim = function() return not music.isAvailable() end },
         { kind = "action", label = "Démarrer le diaporama", act = start, primary = true },
     }
 end
@@ -70,7 +78,9 @@ function M.load(configTable, programModel)
 end
 
 function M.update(dt)
-    if not autostartCancelled then
+    -- Compte à rebours gelé tant qu'aucun programme n'est chargé : on ne bascule
+    -- jamais sur la boucle sans données (cf. start / pied de page).
+    if not autostartCancelled and prog.isLoaded() then
         autostart = autostart - dt
         if autostart <= 0 then autostart = 0; start() end
     end
@@ -85,7 +95,8 @@ local function cycleChoice(f, dir)
     for i, o in ipairs(f.opts) do if o[1] == cur then idx = i end end
     idx = ((idx - 1 + dir) % #f.opts) + 1
     cfg[f.key] = f.opts[idx][1]
-    if f.key == "timeMode" then applyTime() end
+    if f.key == "timeMode" then applyTime()
+    elseif f.key == "musicEnabled" then music.setEnabled(cfg.musicEnabled) end
 end
 
 function M.keypressed(key)
@@ -169,11 +180,11 @@ function M.draw(W, H, time)
     ui.setColor(stColor)
     ui.spacedText(theme.font(20, "bold"), theme.upper(st.message), 0, 110, 2, "right", W - 120)
 
-    -- panneau
-    local px, py, pw = 120, 230, W - 240
-    local rowH, rowGap = 86, 14
+    -- panneau (géométrie resserrée pour que les 8 champs + le pied tiennent en 1080)
+    local px, py, pw = 120, 214, W - 240
+    local rowH, rowGap = 78, 10
     local n = #fields
-    local ph = n * rowH + (n - 1) * rowGap + 56
+    local ph = n * rowH + (n - 1) * rowGap + 52
     ui.card(px, py, pw, ph, 28, { fill = theme.color.white, border = theme.hex("#000000", 0.06) })
 
     local rx, ry = px + 40, py + 30
@@ -243,7 +254,15 @@ function M.draw(W, H, time)
 
     -- pied : auto-démarrage + aide
     local fy = py + ph + 36
-    if not autostartCancelled then
+    if not prog.isLoaded() then
+        -- Aucun programme (ni cache ni réseau) : on reste sur la configuration et on
+        -- l'explique, plutôt que de basculer sur une boucle qui planterait (champs nil).
+        ui.setColor(theme.hex("#d94d4d"))
+        lg.setFont(theme.font(23, "bold"))
+        lg.printf("Aucun programme téléchargé — l'affichage reste sur la configuration. "
+            .. "Le diaporama démarrera dès qu'un programme aura été téléchargé.",
+            120, fy, W - 240, "center")
+    elseif not autostartCancelled then
         ui.setColor(theme.color.gold)
         lg.setFont(theme.font(24, "bold"))
         lg.printf(string.format("Démarrage automatique dans %d s — touchez pour configurer", math.ceil(autostart)),

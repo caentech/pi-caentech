@@ -23,6 +23,7 @@ local fetch      = require("src.fetch")
 local program    = require("src.program")
 local setup      = require("src.setup_screen")
 local interstice = require("src.interstice")
+local music      = require("src.music")
 
 local STAGE_W, STAGE_H = 1920, 1080
 
@@ -34,6 +35,17 @@ local layout = { s = 1, ox = 0, oy = 0 }
 -- mode capture (vérif) : CAENTECH_SHOT="programme@10:20" | "next@..." | "infos" |
 -- "sponsors" | "transition" | "setup"
 local shot = { active = false, delay = 8, t = 0 }
+
+-- mode pré-téléchargement (CAENTECH_PREFETCH) : remplit le cache en ligne (la veille)
+-- puis quitte, sans rien afficher. Voir conf.lua (ni fenêtre ni graphismes).
+local prefetch = { active = false, t = 0, deadline = 120, done = false }
+
+local function finishPrefetch(ok, msg)
+    if prefetch.done then return end
+    prefetch.done = true
+    print(string.format("[prefetch] %s — %s", ok and "ok" or "échec", msg))
+    love.event.quit(ok and 0 or 1)
+end
 
 -- --- Bascule d'états ----------------------------------------------------------
 local function enterLoop()
@@ -62,12 +74,23 @@ function love.load()
     love.math.setRandomSeed(os.time())
 
     cfg = config.load()
-    background.load()
     fetch.start()
 
-    -- URL effective : override par env (dev/capture), sinon réglage sauvegardé.
+    -- URL effective : override par env (dev/capture/prefetch), sinon réglage sauvegardé.
     local url = os.getenv("CAENTECH_PROGRAM_URL") or cfg.programUrl
     cfg.programUrl = url
+
+    -- Pré-téléchargement headless : on lance le fetch du programme et on sort tout de
+    -- suite (la complétion est gérée dans love.update). Pas de cache d'abord (on veut
+    -- la version fraîche), pas de fond, pas de canvas, pas d'écran de setup.
+    if os.getenv("CAENTECH_PREFETCH") then
+        prefetch.active   = true
+        prefetch.deadline = tonumber(os.getenv("CAENTECH_PREFETCH_TIMEOUT") or "120") or 120
+        program.fetchFromUrl(url)
+        return
+    end
+
+    background.load()
     program.loadFromCache()
     program.fetchFromUrl(url)
 
@@ -75,6 +98,10 @@ function love.load()
     stage:setFilter("linear", "linear")
 
     enterSetup()
+
+    -- Musique de fond : lit en boucle le MP3 déposé via la dropbox si présent et si le
+    -- réglage l'autorise (cf. src/music.lua). Défensif : jamais bloquant pour l'affichage.
+    music.load(cfg.musicEnabled)
 
     -- Mode capture scriptable.
     local spec = os.getenv("CAENTECH_SHOT")
@@ -106,6 +133,25 @@ end
 
 function love.update(dt)
     program.onFetched(fetch.poll())
+
+    if prefetch.active then
+        prefetch.t = prefetch.t + dt
+        local st = program.status.state
+        if st == "loading" then
+            if prefetch.t > prefetch.deadline then finishPrefetch(false, "délai dépassé (programme)") end
+        elseif st == "error" then
+            finishPrefetch(false, "programme : " .. (program.status.message or ""))
+        elseif fetch.pendingCount() == 0 then
+            -- programme chargé ET tous les visuels téléchargés.
+            finishPrefetch(true, string.format("%d sessions, cache complet", program.status.sessions or 0))
+        elseif prefetch.t > prefetch.deadline then
+            -- programme OK mais visuels trop lents : cache partiel acceptable
+            -- (l'app complètera au runtime, offline-first).
+            finishPrefetch(true, "cache partiel (délai visuels dépassé)")
+        end
+        return
+    end
+
     if state == "setup" then setup.update(dt) else interstice.update(dt) end
 
     if shot.active then
@@ -115,6 +161,7 @@ function love.update(dt)
 end
 
 function love.draw()
+    if not stage then return end   -- mode prefetch : ni canvas ni rendu
     local t = love.timer.getTime()
     computeLayout()
 

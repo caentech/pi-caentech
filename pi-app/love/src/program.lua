@@ -30,9 +30,21 @@ local function extOf(url)
 end
 
 -- Charge l'image `rel` (déjà sur disque) dans program.assets. Renvoie true si chargée.
+-- En mode pré-téléchargement headless (cf. conf.lua) le module graphics est absent :
+-- on ne charge alors aucune texture (le cache disque, écrit par fetch_thread, suffit).
 local function loadAsset(id, rel)
+    if not love.graphics then return false end
     local okImg, img = pcall(love.graphics.newImage, rel)
     if not okImg then return false end
+    -- Garde-fou GPU : sur le VideoCore du Raspberry Pi, la taille de texture max est
+    -- 2048 px. Une image plus grande « charge » sans erreur mais s'affiche en pixels
+    -- corrompus (logo rose/baveux). On la rejette plutôt (repli propre : texte/nom).
+    local limit = love.graphics.getSystemLimits().texturesize or 2048
+    local iw, ih = img:getDimensions()
+    if math.max(iw, ih) > limit then
+        img:release()
+        return false
+    end
     img:setFilter("linear", "linear")
     if id == "logoMain" then
         program.assets.logoMain = img
@@ -56,7 +68,10 @@ local function requestAsset(job)
 end
 
 local function requestAssets()
-    requestAsset({ id = "logoMain", url = LOGO_MAIN_URL, rel = "cache/logo-main.png" })
+    -- Le logo source fait 2500×2500 — au-dessus de la limite de texture du Pi (2048)
+    -- et inutilement lourd pour un affichage à ~66 px. On le redimensionne au
+    -- téléchargement (cf. fetch_thread `maxH`) : repli texte si l'outil manque.
+    requestAsset({ id = "logoMain", url = LOGO_MAIN_URL, rel = "cache/logo-main.png", maxH = 240 })
 
     for id, sp in pairs(program.data.speakers) do
         if sp.photoUrl and sp.photoUrl ~= "" then
@@ -202,6 +217,13 @@ function program.parse(raw, source)
     }
     requestAssets()
     return true
+end
+
+-- Un programme a-t-il été chargé (depuis le cache ou le réseau) ? Sert à l'écran de
+-- setup pour ne PAS démarrer la boucle sans données : sans programme, les écrans
+-- rendent des champs nil (date, lieu, sessions) → crash. On reste alors sur le setup.
+function program.isLoaded()
+    return program.data ~= nil
 end
 
 -- --- Accès dérivés pour l'écran « à suivre » ----------------------------------

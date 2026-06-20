@@ -35,6 +35,16 @@ local function download(url, dst)
     return sz and sz > 0
 end
 
+-- Réduit le PNG `path` (en place) pour que sa hauteur ne dépasse pas maxH px.
+-- Préserve le ratio (`>` = ne réduit que si plus grand). Nécessite ImageMagick ;
+-- sans outil, ne touche à rien (le garde-fou de chargement fera le repli texte).
+local function resizePng(path, maxH)
+    if not maxH or not hasMagick then return end
+    os.execute(string.format(
+        "magick %q -resize x%d\\> %q >/dev/null 2>&1 || convert %q -resize x%d\\> %q >/dev/null 2>&1",
+        path, maxH, path, path, maxH, path))
+end
+
 -- Convertit src (webp|svg) → out (png). Renvoie true/false.
 local function convert(kind, src, out)
     if kind == "webp" then
@@ -63,6 +73,7 @@ while true do
     local part = job.out .. ".part"
     if not job.conv then
         if download(job.url, part) then
+            resizePng(part, job.maxH)
             ok = os.rename(part, job.out)
             if not ok then os.remove(part); err = "écriture du cache échouée" end
         else
@@ -72,6 +83,7 @@ while true do
         local src = job.out .. "." .. job.conv
         if download(job.url, src) then
             if convert(job.conv, src, part) then
+                resizePng(part, job.maxH)
                 ok = os.rename(part, job.out)
                 if not ok then os.remove(part); err = "écriture du cache échouée" end
             else

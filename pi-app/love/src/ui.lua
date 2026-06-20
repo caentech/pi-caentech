@@ -122,21 +122,45 @@ function ui.pill(s, font, x, y, padX, padY, bg, fg, tracking)
     return w, h
 end
 
--- Photo ronde clippée + anneau coloré. img peut être nil (cercle plein gris).
+-- Masque circulaire par shader (alpha) plutôt que par stencil : sur le GPU VideoCore
+-- du Raspberry Pi (Mesa vc4), l'allocation paresseuse d'un tampon stencil sur le
+-- canvas de rendu efface tout son contenu couleur (fond → transparent/noir). On
+-- découpe donc la photo ronde en annulant l'alpha hors du disque, sans stencil.
+-- `center`/`radius` sont en coordonnées du canvas (= coordonnées « stage » 1920×1080),
+-- comme les screen_coords reçus par le shader lors du rendu dans le canvas.
+local CIRCLE_MASK = [[
+extern vec2 center;
+extern float radius;
+vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
+    vec4 c = Texel(tex, tc) * color;
+    c.a *= 1.0 - smoothstep(radius - 1.5, radius + 1.5, distance(sc, center));
+    return c;
+}
+]]
+local circleShader
+
+-- Photo ronde (masque shader) + anneau coloré. img peut être nil (cercle plein gris).
 function ui.circlePhoto(img, cx, cy, radius, ringColor, ringW)
     ringW = ringW or 5
-    lg.stencil(function() lg.circle("fill", cx, cy, radius) end, "replace", 1)
-    lg.setStencilTest("greater", 0)
     if img then
+        if circleShader == nil then
+            local ok, sh = pcall(lg.newShader, CIRCLE_MASK)
+            circleShader = ok and sh or false
+        end
         local iw, ih = img:getDimensions()
         local s = (radius * 2) / math.min(iw, ih)
+        if circleShader then
+            circleShader:send("center", { cx, cy })
+            circleShader:send("radius", radius)
+            lg.setShader(circleShader)
+        end
         ui.setColor({ 1, 1, 1, 1 })
         lg.draw(img, cx, cy, 0, s, s, iw / 2, ih / 2)
+        lg.setShader()
     else
         ui.setColor({ 0.9, 0.88, 0.82, 1 })
         lg.circle("fill", cx, cy, radius)
     end
-    lg.setStencilTest()
     -- anneau
     ui.setColor(ringColor)
     lg.setLineWidth(ringW)

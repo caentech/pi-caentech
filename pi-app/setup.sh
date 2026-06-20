@@ -100,6 +100,25 @@ log "navigateur headless : $BROWSER_BIN"
 # Le script de rendu doit être exécutable (appelé via `bash`, mais on aligne les droits).
 chmod 0755 "$LOVE_DIR/render-interstice.sh" 2>/dev/null || true
 
+# 1ter. Outils de conversion/redimensionnement d'images (tâche de fond fetch_thread) :
+#       - rsvg-convert (librsvg2-bin) : logos sponsors SVG → PNG ;
+#       - dwebp (webp)               : logos sponsors WebP → PNG ;
+#       - magick/convert (imagemagick) : repli de conversion + redimensionnement du
+#         logo Caen.tech (2500 px) sous la limite de texture GPU du Pi (2048 px).
+#       Sans eux, les logos sponsors n'apparaissent pas et le logo principal tombe en
+#       repli texte. On installe ce qui manque.
+MISSING_IMG=()
+command -v rsvg-convert >/dev/null 2>&1 || MISSING_IMG+=("librsvg2-bin")
+command -v dwebp        >/dev/null 2>&1 || MISSING_IMG+=("webp")
+{ command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; } || MISSING_IMG+=("imagemagick")
+if [ "${#MISSING_IMG[@]}" -gt 0 ]; then
+    log "outils image manquants — installation : ${MISSING_IMG[*]}"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y "${MISSING_IMG[@]}" || log "AVERTISSEMENT : installation des outils image partielle."
+fi
+log "outils image : rsvg-convert=$(command -v rsvg-convert || echo non)  dwebp=$(command -v dwebp || echo non)  magick=$(command -v magick || command -v convert || echo non)"
+
 # 2. Accès au DRM / framebuffer / entrées pour le compte d'affichage.
 #    (le seat logind accorde aussi /dev/dri via ACL, ceci est une ceinture+bretelles.)
 for g in video render input; do
@@ -156,7 +175,8 @@ StandardError=journal
 # L'écran ne doit jamais s'éteindre ni afficher de curseur clignotant.
 ExecStartPre=-/usr/bin/setterm --blank 0 --powerdown 0 --cursor off
 Environment=SDL_VIDEODRIVER=kmsdrm
-Environment=SDL_AUDIODRIVER=dummy
+# Audio (musique de fond, cf. love/src/music.lua) : LÖVE sort via OpenAL → ALSA.
+# On ne force donc PLUS le pilote SDL audio « dummy » (qui aurait coupé tout son).
 WorkingDirectory=$LOVE_DIR
 ExecStart=$RUNNER
 Restart=always
@@ -173,4 +193,25 @@ systemctl enable "$SERVICE" >/dev/null 2>&1 || systemctl enable "$SERVICE"
 systemctl restart "$SERVICE"
 
 log "service '$SERVICE' activé au boot et démarré."
+
+# 6. Résilience hors ligne : pré-remplissage du cache (programme + visuels).
+#    Le Pi est provisionné LA VEILLE, EN LIGNE ; le jour J il peut booter SANS réseau
+#    (Wi-Fi du lieu absent/instable au démarrage). Or le cache n'est sinon rempli que
+#    lorsque l'app tourne en ligne — ce qui peut ne jamais arriver pendant le setup
+#    (le service attend un écran HDMI, cf. run-signage.sh, et on provisionne souvent
+#    sans écran). On remplit donc le cache MAINTENANT, en mode headless (ni fenêtre ni
+#    GPU : aucun écran requis), via le même chemin de téléchargement que l'app
+#    (curl + conversions, cf. love/src/fetch_thread.lua). Échec NON bloquant : l'app
+#    réessaiera au runtime si une connexion est disponible (offline-first).
+log "pré-téléchargement du programme dans le cache LÖVE (headless, en ligne)…"
+PREFETCH_ENV=(CAENTECH_PREFETCH=1)
+if [ -n "${CAENTECH_PROGRAM_URL:-}" ]; then
+    PREFETCH_ENV+=("CAENTECH_PROGRAM_URL=$CAENTECH_PROGRAM_URL")
+fi
+if timeout 300 sudo -H -u "$TARGET_USER" env "${PREFETCH_ENV[@]}" "$LOVE_BIN" "$LOVE_DIR"; then
+    log "cache pré-rempli — l'app démarrera sur des données valides même hors ligne."
+else
+    log "AVERTISSEMENT : pré-téléchargement échoué (réseau ?) — l'app retentera au démarrage."
+fi
+
 echo "ok"

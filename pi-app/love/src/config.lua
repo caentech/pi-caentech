@@ -12,6 +12,7 @@ local defaults = {
     thisRoom     = "none",     -- "none" | "conference" | "auditorium" (salle de cet écran)
     timeMode     = "real",     -- "real" | "manual"
     manualTime   = "10:20",    -- utilisé si timeMode == "manual"
+    musicEnabled = true,       -- musique de fond (MP3 dropbox) : activée par défaut
 }
 
 local function copyDefaults()

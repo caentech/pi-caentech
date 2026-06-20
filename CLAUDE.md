@@ -78,13 +78,24 @@ caen.tech's `program/model.json`. `pi-app/setup.sh` installs LÖVE and deploys i
 `pi-app/update.sh` refreshes it.
 
 **Prerequisite — install online, runtime offline.** Enrollment/setup happens **online**
-(apt installs LÖVE, the first asset fetch populates the cache). But the app **must
-assume it boots with no network** (venue Wi-Fi flaky/absent at startup). Concretely:
+(the day before), but the app **must assume it boots with no network** (venue Wi-Fi
+flaky/absent at startup). Concretely:
 
+- **Cache pre-filled at setup** (`pi-app/setup.sh` step 6): the cache is **not** left to
+  be populated by the first online run of the app — the signage service waits for an
+  HDMI screen before launching LÖVE (`run-signage.sh`), and Pis are often provisioned
+  screenless, so that run may never happen during setup. Instead `setup.sh` runs LÖVE
+  **headless** once (`CAENTECH_PREFETCH=1`, as the display user) to download the program
+  + visuals into the cache right then. This reuses the app's own download path
+  (`src/fetch_thread.lua`) so the cache is built exactly as the running app expects.
+  Headless = no window, no graphics (see `conf.lua`): no screen/GPU required. Failure is
+  **non-blocking** (the app retries at runtime). `main.lua` drives the prefetch loop and
+  exits 0/1 on success/failure.
 - **Offline-first asset loading** (`src/program.lua`): every visual (logos, speaker
   photos) is loaded from the on-disk cache **immediately** if present, then a
   background refresh is queued; the fresh version replaces it only if the download
-  succeeds. Never gate display on a successful fetch.
+  succeeds. Never gate display on a successful fetch. The setup screen likewise shows
+  the cached program at once and refreshes only if a connection is available.
 - **Cache writes are atomic** (`src/fetch_thread.lua`): downloads/conversions go to a
   `.part` file, renamed onto the real cache path only on success — an interrupted
   refresh must never corrupt the cache the next offline boot depends on.
@@ -92,6 +103,18 @@ assume it boots with no network** (venue Wi-Fi flaky/absent at startup). Concret
   magick) constraining **one** dimension only (e.g. `rsvg-convert -h 300`); never fix
   both width and height (that stretches non-landscape logos). The sponsors screen
   fit-scales within the card, so only the ratio matters.
+
+**Background music** (`src/music.lua`): loops an MP3 dropped on the Pi via pi-manager's
+**dropbox** (scp to `~/.pi-manager/files/`, cf. `DeviceService.pushFile`). The file
+lives **outside** the LÖVE save dir, so it's read with `io.open` and wrapped in a
+streaming source (env override `CAENTECH_MUSIC_FILE`, else first `*.mp3` in the dropbox
+dir). The `musicEnabled` setting (settings.json, **default true**, toggled on the setup
+screen) gates playback — a Pi can be configured silent even with an MP3 present; if an
+MP3 is there at boot and the setting is on, it plays. Only checked **at startup** (MP3s
+dropped later need a service restart). Audio modules are re-enabled in `conf.lua` (off
+only in prefetch); `setup.sh`'s unit no longer forces `SDL_AUDIODRIVER=dummy` (LÖVE
+outputs via OpenAL→ALSA). All of `music.lua` is `pcall`-guarded — a missing file or no
+audio device never breaks the display.
 
 Cache lives in the LÖVE save dir (`~/Library/Application Support/LOVE/caentech-signage/`
 on the Mac dev). Headless capture for verifying a screen offline:

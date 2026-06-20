@@ -12,6 +12,27 @@ function love.conf(t)
     t.identity = "caentech-signage"
     t.version = "11.5"
 
+    -- Mode pré-téléchargement (CAENTECH_PREFETCH) : utilisé par pi-app/setup.sh la
+    -- veille de l'événement, EN LIGNE, pour remplir le cache (programme + visuels)
+    -- avant un éventuel boot HORS LIGNE le jour J. On tourne alors SANS fenêtre ni
+    -- graphismes (le Pi est souvent provisionné sans écran : pas de framebuffer DRM),
+    -- en pur logique + réseau (curl, cf. src/fetch_thread.lua) + filesystem. La boucle
+    -- principale (event/timer/update) suffit ; love.run ne dessine pas si graphics est
+    -- désactivé. Voir main.lua pour la logique de complétion + sortie.
+    if os.getenv("CAENTECH_PREFETCH") then
+        t.modules.window   = false
+        t.modules.graphics = false
+        t.modules.image    = false
+        t.modules.font     = false
+        t.modules.audio = false
+        t.modules.sound = false
+        t.modules.physics = false
+        t.modules.joystick = false
+        t.modules.touch = false
+        t.modules.video = false
+        return
+    end
+
     local windowed = os.getenv("CAENTECH_WINDOWED")
 
     t.window.title = "Caen.tech"
@@ -33,9 +54,8 @@ function love.conf(t)
         t.window.borderless = true
     end
 
-    -- Modules inutiles pour de l'affichage de formes : on les coupe.
-    t.modules.audio = false
-    t.modules.sound = false
+    -- audio/sound : nécessaires à la musique de fond (MP3 en boucle, cf. src/music.lua).
+    -- Modules réellement inutiles pour l'affichage : on les coupe.
     t.modules.physics = false
     t.modules.joystick = false
     t.modules.touch = false
